@@ -1,0 +1,24 @@
+{
+  "name": "@home-hub/db",
+  "version": "0.1.0",
+  "private": true,
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsc -p tsconfig.json --watch",
+    "generate": "drizzle-kit generate",
+    "migrate": "tsx src/migrate.ts"
+  },
+  "dependencies": {
+    "@home-hub/core": "workspace:*",
+    "better-sqlite3": "^11.0.0",
+    "drizzle-orm": "^0.36.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.11",
+    "drizzle-kit": "^0.30.0",
+    "tsx": "^4.16.0",
+    "typescript": "^5.4.5"
+  }
+}
