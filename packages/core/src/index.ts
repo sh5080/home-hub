@@ -27,3 +27,5 @@ export type {
   HubEvent,
 } from './events';
 export { EventSource, HubEventType } from './events';
+
+export { LogLevel } from './config';

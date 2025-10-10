@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { LogLevel } from '@home-hub/core';
 
 const adapterRefSchema = z.object({
   id: z.string(),
@@ -8,7 +9,7 @@ const adapterRefSchema = z.object({
 export const hubConfigSchema = z.object({
   server: z.object({
     adminPort: z.number().default(8080),
-    logLevel: z.enum(['trace', 'debug', 'info', 'warn', 'error', 'fatal']).default('info'),
+    logLevel: z.nativeEnum(LogLevel).default(LogLevel.INFO),
   }),
   hap: z.object({
     bridgeName: z.string().default('Home Hub'),
