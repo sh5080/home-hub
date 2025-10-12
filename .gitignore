@@ -1,6 +1,7 @@
 node_modules/
 dist/
 *.js.map
+*.tsbuildinfo
 
 # Data (HAP pairing state + SQLite)
 .data/
