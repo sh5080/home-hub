@@ -1,0 +1,23 @@
+# Binaries
+/hub
+/hub-arm
+/bin/
+*.exe
+
+# Test / coverage
+*.out
+*.test
+
+# Go workspace
+go.work
+go.work.sum
+
+# Local config / secrets
+*.local.yaml
+.env
+
+# Tooling / OS / editor
+.claude/
+.DS_Store
+.idea/
+.vscode/
