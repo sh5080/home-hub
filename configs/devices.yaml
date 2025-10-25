@@ -1,0 +1,20 @@
+zigbee:
+  port: /dev/ttyUSB0          # Zigbee coordinator (CC2652 family)
+
+mqtt:
+  listen: ":1883"             # embedded broker
+
+devices:
+  - {id: switch_1, name: "Switch 1", integration: zigbee, addr: "0x00158d0001abcd01", type: switch}
+  - {id: fan_1,    name: "Fan 1",    integration: mqtt,   addr: "home/room/fan",      type: fan}
+  - {id: cover_1,  name: "Cover 1",  integration: mqtt,   addr: "home/room/curtain",  type: cover}
+
+  # Matter device: HomeKit-delegated for now; only virtual triggers are exposed.
+  - id: blind_1
+    name: "Blind 1"
+    integration: matter
+    type: cover
+    driver: delegated           # later: go-matter
+    triggers:
+      close: blind_close
+      open: blind_open
