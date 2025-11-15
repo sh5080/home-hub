@@ -1,0 +1,15 @@
+[Unit]
+Description=Home Hub
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/opt/home-hub/hub --config /opt/home-hub/devices.yaml
+Restart=always
+RestartSec=5
+User=homehub
+# serial coordinator access requires the dialout group
+SupplementaryGroups=dialout
+
+[Install]
+WantedBy=multi-user.target
