@@ -1,0 +1,3 @@
+devices:
+  - {id: x, integration: zigbee, type: switch}
+  - {id: x, integration: mqtt, type: fan}

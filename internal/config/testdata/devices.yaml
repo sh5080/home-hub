@@ -1,0 +1,16 @@
+zigbee:
+  port: /dev/ttyUSB0
+
+mqtt:
+  listen: ":1883"
+
+devices:
+  - {id: s1, name: "S1", integration: zigbee, addr: "0x01", type: switch}
+  - id: b1
+    name: "B1"
+    integration: matter
+    type: cover
+    driver: delegated
+    triggers:
+      open: b1_open
+      close: b1_close
