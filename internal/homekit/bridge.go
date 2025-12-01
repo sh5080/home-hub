@@ -47,8 +47,8 @@ func (br *Bridge) Start(ctx context.Context) error {
 		if d.Integration == domain.Matter {
 			continue // Matter devices are delegated; only their triggers are exposed
 		}
-		// TODO(hap): create an accessory per device type and bind characteristics.
-		br.log.Info("publish accessory", "id", d.ID, "type", d.Type)
+		// TODO(hap): create the accessory and bind characteristics.
+		br.log.Info("publish accessory", "id", d.ID, "type", d.Type, "hap", accessoryKind(d.Type))
 	}
 	// TODO(hap): start hap.Server; on characteristic write -> br.bus.PublishCommand(...)
 	<-ctx.Done()
