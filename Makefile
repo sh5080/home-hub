@@ -1,13 +1,22 @@
 BINARY := hub
 PKG := ./cmd/hub
 
-.PHONY: build run tidy pi clean
+.PHONY: build run test vet fmt tidy pi clean
 
 build:
 	go build -o $(BINARY) $(PKG)
 
 run:
 	go run $(PKG) --config configs/devices.yaml
+
+test:
+	go test ./...
+
+vet:
+	go vet ./...
+
+fmt:
+	gofmt -l -w .
 
 tidy:
 	go mod tidy
