@@ -16,6 +16,7 @@ import (
 	"github.com/sh5080/home-hub/internal/config"
 	"github.com/sh5080/home-hub/internal/domain"
 	"github.com/sh5080/home-hub/internal/driver"
+	"github.com/sh5080/home-hub/internal/health"
 	"github.com/sh5080/home-hub/internal/homekit"
 	"github.com/sh5080/home-hub/internal/matter"
 	"github.com/sh5080/home-hub/internal/mqtt"
@@ -30,6 +31,7 @@ type runnable interface {
 
 func main() {
 	cfgPath := flag.String("config", "configs/devices.yaml", "path to config file")
+	healthAddr := flag.String("health", ":8086", "health endpoint listen address")
 	flag.Parse()
 
 	log := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
@@ -52,17 +54,19 @@ func main() {
 	mq := mqtt.New(cfg.MQTT.Listen, b, log)
 	hk := homekit.New(b, reg, log)
 
-	// Matter devices are delegated to HomeKit via virtual trigger switches.
+	// Matter devices are delegated to HomeKit via virtual trigger switches and
+	// tracked in a registry so automations/HomeKit can target them later.
+	matterReg := matter.NewRegistry()
 	for _, dc := range cfg.Devices {
 		if dc.Integration != domain.Matter {
 			continue
 		}
 		pressOpen := hk.RegisterTrigger(dc.Triggers["open"])
 		pressClose := hk.RegisterTrigger(dc.Triggers["close"])
-		_ = matter.NewDelegated(pressOpen, pressClose, log)
-		// TODO: register the delegated driver so automations can target it.
+		matterReg.Set(dc.ID, matter.NewDelegated(pressOpen, pressClose, log))
 		log.Info("matter device delegated to homekit", "id", dc.ID)
 	}
+	log.Info("matter devices registered", "count", len(matterReg.IDs()))
 
 	// Command routing: integration -> the adapter that owns it.
 	owners := map[domain.Integration]driver.Driver{
@@ -78,6 +82,7 @@ func main() {
 	}
 
 	auto := automation.New(b, log)
+	hz := health.New(*healthAddr, log)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -114,7 +119,7 @@ func main() {
 
 	// Start long-running components.
 	var wg sync.WaitGroup
-	for _, r := range []runnable{zb, mq, hk, auto} {
+	for _, r := range []runnable{zb, mq, hk, auto, hz} {
 		wg.Add(1)
 		go func(r runnable) {
 			defer wg.Done()
