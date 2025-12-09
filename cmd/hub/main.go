@@ -142,6 +142,7 @@ func main() {
 			case <-ctx.Done():
 				return
 			case e := <-events:
+				reg.SetState(e.DeviceID, e.State)
 				hk.OnEvent(e)
 			}
 		}
