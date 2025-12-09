@@ -29,6 +29,29 @@ type runnable interface {
 	Start(ctx context.Context) error
 }
 
+// applyMatter maps a domain command onto a Matter driver.
+func applyMatter(d matter.Driver, c domain.Command) error {
+	switch c.Action {
+	case domain.ActionSetOn:
+		if on, _ := c.Value.(bool); on {
+			return d.Open()
+		}
+		return d.Close()
+	case domain.ActionSetPosition:
+		p, _ := c.Value.(int)
+		switch {
+		case p >= 100:
+			return d.Open()
+		case p <= 0:
+			return d.Close()
+		default:
+			return d.SetLiftPercent(p)
+		}
+	default:
+		return nil
+	}
+}
+
 func main() {
 	cfgPath := flag.String("config", "configs/devices.yaml", "path to config file")
 	healthAddr := flag.String("health", ":8086", "health endpoint listen address")
@@ -98,6 +121,13 @@ func main() {
 				if d := owner(c.DeviceID); d != nil {
 					if err := d.Apply(c); err != nil {
 						log.Error("apply", "device", c.DeviceID, "err", err)
+					}
+					continue
+				}
+				// Matter devices have no protocol adapter; route to their driver.
+				if md, ok := matterReg.Get(c.DeviceID); ok {
+					if err := applyMatter(md, c); err != nil {
+						log.Error("matter apply", "device", c.DeviceID, "err", err)
 					}
 				}
 			}
