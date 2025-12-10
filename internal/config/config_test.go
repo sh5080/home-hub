@@ -42,3 +42,16 @@ func TestLoadMissingFile(t *testing.T) {
 		t.Fatal("expected error for missing file")
 	}
 }
+
+func TestLoadRules(t *testing.T) {
+	c, err := Load(filepath.Join("testdata", "devices.yaml"))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(c.Rules) != 1 {
+		t.Fatalf("rules = %d, want 1", len(c.Rules))
+	}
+	if r := c.Rules[0]; r.Type != "mirror" || r.Src != "s1" || r.Dst != "b1" {
+		t.Fatalf("rule 0 = %+v", r)
+	}
+}

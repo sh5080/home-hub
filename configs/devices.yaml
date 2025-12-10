@@ -18,3 +18,7 @@ devices:
     triggers:
       close: blind_close
       open: blind_open
+
+# Automation rules evaluated inside the hub (both devices must be hub-owned).
+rules:
+  - {type: mirror, src: switch_1, dst: fan_1}

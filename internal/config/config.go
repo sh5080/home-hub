@@ -14,6 +14,7 @@ type Config struct {
 	Zigbee  ZigbeeConfig   `yaml:"zigbee"`
 	MQTT    MQTTConfig     `yaml:"mqtt"`
 	Devices []DeviceConfig `yaml:"devices"`
+	Rules   []RuleConfig   `yaml:"rules"`
 }
 
 // ZigbeeConfig configures the Zigbee coordinator.
@@ -34,6 +35,14 @@ type DeviceConfig struct {
 	Driver string `yaml:"driver,omitempty"` // "delegated" | "go-matter"
 	// Matter delegated-only: action -> HAP virtual trigger switch id.
 	Triggers map[string]string `yaml:"triggers,omitempty"`
+}
+
+// RuleConfig declares an automation rule. Currently only "mirror" is supported,
+// which mirrors the on/off state of Src onto Dst.
+type RuleConfig struct {
+	Type string `yaml:"type"` // "mirror"
+	Src  string `yaml:"src"`
+	Dst  string `yaml:"dst"`
 }
 
 // Load reads and parses the config file at path.
@@ -62,6 +71,17 @@ func (c *Config) validate() error {
 			return fmt.Errorf("duplicate device id: %s", d.ID)
 		}
 		seen[d.ID] = true
+	}
+	for i, r := range c.Rules {
+		if r.Type != "mirror" {
+			return fmt.Errorf("rule %d: unknown type %q", i, r.Type)
+		}
+		if !seen[r.Src] {
+			return fmt.Errorf("rule %d: unknown src device %q", i, r.Src)
+		}
+		if !seen[r.Dst] {
+			return fmt.Errorf("rule %d: unknown dst device %q", i, r.Dst)
+		}
 	}
 	return nil
 }

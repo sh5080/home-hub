@@ -14,3 +14,6 @@ devices:
     triggers:
       open: b1_open
       close: b1_close
+
+rules:
+  - {type: mirror, src: s1, dst: b1}
