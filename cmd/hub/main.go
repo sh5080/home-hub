@@ -105,6 +105,12 @@ func main() {
 	}
 
 	auto := automation.New(b, log)
+	for _, r := range cfg.Rules {
+		if r.Type == "mirror" {
+			auto.Add(automation.MirrorRule(r.Src, r.Dst))
+		}
+	}
+	log.Info("automation rules loaded", "count", len(cfg.Rules))
 	hz := health.New(*healthAddr, log)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
