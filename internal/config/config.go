@@ -11,10 +11,19 @@ import (
 
 // Config is the top-level hub configuration.
 type Config struct {
+	HomeKit HomeKitConfig  `yaml:"homekit"`
 	Zigbee  ZigbeeConfig   `yaml:"zigbee"`
 	MQTT    MQTTConfig     `yaml:"mqtt"`
 	Devices []DeviceConfig `yaml:"devices"`
 	Rules   []RuleConfig   `yaml:"rules"`
+}
+
+// HomeKitConfig configures the HAP bridge exposed to HomeKit controllers.
+type HomeKitConfig struct {
+	Name    string `yaml:"name"`
+	Pin     string `yaml:"pin"`     // 8-digit pairing code
+	Port    string `yaml:"port"`    // HAP listen port
+	Storage string `yaml:"storage"` // path for pairing/state persistence
 }
 
 // ZigbeeConfig configures the Zigbee coordinator.

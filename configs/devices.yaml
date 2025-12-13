@@ -1,3 +1,9 @@
+homekit:
+  name: "Home Hub"
+  pin: "00102003"             # 8-digit HAP pairing code; change before use
+  port: "51826"
+  storage: "./hap-data"       # pairing/state persistence
+
 zigbee:
   port: /dev/ttyUSB0          # Zigbee coordinator (CC2652 family)
 
