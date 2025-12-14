@@ -16,6 +16,9 @@ go.work.sum
 *.local.yaml
 .env
 
+# HAP pairing/state store
+/hap-data/
+
 # Tooling / OS / editor
 .claude/
 .DS_Store

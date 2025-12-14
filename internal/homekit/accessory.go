@@ -1,22 +1,66 @@
 package homekit
 
-import "github.com/sh5080/home-hub/internal/domain"
+import (
+	"github.com/brutella/hap/accessory"
 
-// accessoryKind names the HAP accessory/service a device type maps to. It is
-// the scaffold mapping used until real hap.Accessory types are wired in.
-func accessoryKind(t domain.DeviceType) string {
-	switch t {
-	case domain.TypeSwitch:
-		return "Switch"
+	"github.com/sh5080/home-hub/internal/domain"
+)
+
+// devAccessory bundles a HAP accessory with a closure that pushes domain state
+// onto its characteristics.
+type devAccessory struct {
+	a     *accessory.A
+	apply func(domain.State)
+}
+
+// buildAccessory creates a HAP accessory for d, wiring writable characteristics
+// to publish commands through onCmd.
+func (br *Bridge) buildAccessory(d domain.Device, onCmd func(domain.Command)) devAccessory {
+	info := accessory.Info{
+		Name:         d.Name,
+		SerialNumber: d.ID,
+		Manufacturer: "home-hub",
+		Model:        string(d.Type),
+	}
+	switch d.Type {
 	case domain.TypeLight:
-		return "Lightbulb"
+		a := accessory.NewLightbulb(info)
+		a.Lightbulb.On.OnValueRemoteUpdate(func(on bool) { onCmd(domain.SetOn(d.ID, on)) })
+		return devAccessory{a: a.A, apply: func(s domain.State) {
+			if s.On != nil {
+				a.Lightbulb.On.SetValue(*s.On)
+			}
+		}}
 	case domain.TypeFan:
-		return "Fan"
+		a := accessory.NewFan(info)
+		a.Fan.On.OnValueRemoteUpdate(func(on bool) { onCmd(domain.SetOn(d.ID, on)) })
+		return devAccessory{a: a.A, apply: func(s domain.State) {
+			if s.On != nil {
+				a.Fan.On.SetValue(*s.On)
+			}
+		}}
 	case domain.TypeCover:
-		return "WindowCovering"
+		a := accessory.NewWindowCovering(info)
+		a.WindowCovering.TargetPosition.OnValueRemoteUpdate(func(p int) { onCmd(domain.SetPosition(d.ID, p)) })
+		return devAccessory{a: a.A, apply: func(s domain.State) {
+			if s.Position != nil {
+				a.WindowCovering.CurrentPosition.SetValue(*s.Position)
+			}
+		}}
 	case domain.TypeSensor:
-		return "TemperatureSensor"
-	default:
-		return "Switch"
+		a := accessory.NewTemperatureSensor(info)
+		return devAccessory{a: a.A, apply: func(s domain.State) {
+			if s.Value != nil {
+				a.TempSensor.CurrentTemperature.SetValue(*s.Value)
+			}
+		}}
+	default: // TypeSwitch
+		a := accessory.NewSwitch(info)
+		a.Switch.On.OnValueRemoteUpdate(func(on bool) { onCmd(domain.SetOn(d.ID, on)) })
+		return devAccessory{a: a.A, apply: func(s domain.State) {
+			if s.On != nil {
+				a.Switch.On.SetValue(*s.On)
+			}
+		}}
 	}
 }

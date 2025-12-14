@@ -75,7 +75,12 @@ func main() {
 	// Protocol adapters.
 	zb := zigbee.New(cfg.Zigbee.Port, b, log)
 	mq := mqtt.New(cfg.MQTT.Listen, b, log)
-	hk := homekit.New(b, reg, log)
+	hk := homekit.New(homekit.Config{
+		Name:    cfg.HomeKit.Name,
+		Pin:     cfg.HomeKit.Pin,
+		Addr:    ":" + cfg.HomeKit.Port,
+		Storage: cfg.HomeKit.Storage,
+	}, b, reg, log)
 
 	// Matter devices are delegated to HomeKit via virtual trigger switches and
 	// tracked in a registry so automations/HomeKit can target them later.
