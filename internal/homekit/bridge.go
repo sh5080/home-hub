@@ -80,8 +80,13 @@ func (br *Bridge) Start(ctx context.Context) error {
 	return server.ListenAndServe(ctx)
 }
 
-// OnEvent reflects a device state change onto its HAP characteristics.
+// OnEvent reflects a device state change onto its HAP characteristics so the
+// change is pushed to HomeKit controllers.
 func (br *Bridge) OnEvent(e domain.Event) {
-	// TODO(12/20): apply e.State onto the accessory characteristics.
+	da, ok := br.devs[e.DeviceID]
+	if !ok {
+		return
+	}
+	da.apply(e.State)
 	br.log.Debug("homekit reflect", "id", e.DeviceID, "kind", e.Kind)
 }
