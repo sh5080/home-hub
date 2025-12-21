@@ -5,6 +5,7 @@ package homekit
 import (
 	"context"
 	"log/slog"
+	"time"
 
 	"github.com/brutella/hap"
 	"github.com/brutella/hap/accessory"
@@ -50,8 +51,14 @@ func (br *Bridge) Name() string { return "homekit" }
 // RegisterTrigger exposes a stateless virtual switch that HomeKit automations
 // can react to, and returns a func that "presses" it.
 func (br *Bridge) RegisterTrigger(id string) func() {
-	// TODO(12/21): expose a real Switch accessory and pulse its characteristic.
-	return func() { br.log.Info("virtual trigger pressed", "trigger", id) }
+	sw := accessory.NewSwitch(accessory.Info{Name: id, SerialNumber: id, Manufacturer: "home-hub"})
+	br.triggers[id] = sw
+	return func() {
+		// Pulse On->Off so a HomeKit automation with a "turns on" trigger fires.
+		sw.Switch.On.SetValue(true)
+		time.AfterFunc(500*time.Millisecond, func() { sw.Switch.On.SetValue(false) })
+		br.log.Info("virtual trigger pressed", "trigger", id)
+	}
 }
 
 // Start builds accessories from the registry and serves HAP until ctx is done.
@@ -67,6 +74,10 @@ func (br *Bridge) Start(ctx context.Context) error {
 		br.devs[d.ID] = da
 		as = append(as, da.a)
 		br.log.Info("publish accessory", "id", d.ID, "type", d.Type)
+	}
+	for id, sw := range br.triggers {
+		as = append(as, sw.A)
+		br.log.Info("publish virtual trigger", "trigger", id)
 	}
 
 	store := hap.NewFsStore(br.cfg.Storage)
