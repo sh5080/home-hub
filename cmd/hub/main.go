@@ -73,7 +73,7 @@ func main() {
 	log.Info("registry loaded", "devices", len(reg.List()))
 
 	// Protocol adapters.
-	zb := zigbee.New(cfg.Zigbee.Port, b, log)
+	zb := zigbee.New(cfg.Zigbee.Port, b, reg, log)
 	mq := mqtt.New(cfg.MQTT.Listen, b, log)
 	hk := homekit.New(homekit.Config{
 		Name:    cfg.HomeKit.Name,
