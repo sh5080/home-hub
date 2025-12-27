@@ -72,8 +72,30 @@ func (d *Driver) Start(ctx context.Context) error {
 	}
 	d.log.Info("zigbee coordinator initialised", "port", d.port)
 
-	<-ctx.Done()
-	return ctx.Err()
+	if err := d.z.PermitJoin(ctx, true); err != nil {
+		d.log.Warn("permit join failed", "err", err)
+	}
+	return d.readEvents(ctx)
+}
+
+// readEvents consumes coordinator events until ctx is cancelled.
+func (d *Driver) readEvents(ctx context.Context) error {
+	for {
+		event, err := d.z.ReadEvent(ctx)
+		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			d.log.Error("zigbee read event", "err", err)
+			continue
+		}
+		switch e := event.(type) {
+		case zigbee.NodeJoinEvent:
+			d.log.Info("zigbee node joined", "ieee", e.IEEEAddress.String())
+		default:
+			d.log.Debug("zigbee event", "type", fmt.Sprintf("%T", event))
+		}
+	}
 }
 
 // Apply sends a command to a Zigbee device.
