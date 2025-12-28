@@ -7,6 +7,9 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strconv"
+	"strings"
+	"time"
 
 	"github.com/shimmeringbee/persistence/impl/memory"
 	"github.com/shimmeringbee/zigbee"
@@ -92,15 +95,106 @@ func (d *Driver) readEvents(ctx context.Context) error {
 		switch e := event.(type) {
 		case zigbee.NodeJoinEvent:
 			d.log.Info("zigbee node joined", "ieee", e.IEEEAddress.String())
+		case zigbee.NodeIncomingMessageEvent:
+			d.handleIncoming(e)
 		default:
 			d.log.Debug("zigbee event", "type", fmt.Sprintf("%T", event))
 		}
 	}
 }
 
-// Apply sends a command to a Zigbee device.
+// Apply maps a command to a ZCL On/Off cluster command and sends it.
 func (d *Driver) Apply(cmd domain.Command) error {
-	// TODO(12/28): map to a ZCL command and send via the coordinator.
-	d.log.Info("zigbee apply", "device", cmd.DeviceID, "action", cmd.Action)
-	return nil
+	if d.z == nil {
+		return fmt.Errorf("zigbee coordinator not ready")
+	}
+	if cmd.Action != domain.ActionSetOn {
+		return nil
+	}
+	dev, ok := d.reg.Get(cmd.DeviceID)
+	if !ok {
+		return fmt.Errorf("unknown device %s", cmd.DeviceID)
+	}
+	addr, err := parseIEEE(dev.Addr)
+	if err != nil {
+		return err
+	}
+
+	on, _ := cmd.Value.(bool)
+	var commandID byte = 0x00 // Off
+	if on {
+		commandID = 0x01 // On
+	}
+	d.seq++
+	// ZCL cluster-specific frame: frame control (0x01), transaction seq, command id.
+	msg := zigbee.ApplicationMessage{
+		ClusterID:           onOffCluster,
+		SourceEndpoint:      adapterEndpt,
+		DestinationEndpoint: adapterEndpt,
+		Data:                []byte{0x01, d.seq, commandID},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return d.z.SendApplicationMessageToNode(ctx, addr, msg, true)
+}
+
+// parseIEEE converts a "0x..." hex string into a Zigbee IEEE address.
+func parseIEEE(s string) (zigbee.IEEEAddress, error) {
+	v, err := strconv.ParseUint(strings.TrimPrefix(strings.ToLower(s), "0x"), 16, 64)
+	if err != nil {
+		return 0, fmt.Errorf("bad ieee address %q: %w", s, err)
+	}
+	return zigbee.IEEEAddress(v), nil
+}
+
+// handleIncoming turns an On/Off attribute report into a state event.
+func (d *Driver) handleIncoming(e zigbee.NodeIncomingMessageEvent) {
+	msg := e.IncomingMessage.ApplicationMessage
+	if msg.ClusterID != onOffCluster {
+		return
+	}
+	on, ok := parseOnOffReport(msg.Data)
+	if !ok {
+		return
+	}
+	id := d.deviceIDByAddr(e.IEEEAddress)
+	if id == "" {
+		return
+	}
+	d.bus.PublishEvent(domain.Event{
+		DeviceID: id,
+		Kind:     domain.EventStateChanged,
+		State:    domain.State{On: domain.BoolPtr(on)},
+	})
+}
+
+// parseOnOffReport extracts the On/Off value from a ZCL Report Attributes
+// (0x0a) frame for the On/Off cluster attribute 0x0000 (boolean). Best-effort.
+func parseOnOffReport(data []byte) (bool, bool) {
+	if len(data) < 3 || data[2] != 0x0a { // command 0x0a = Report Attributes
+		return false, false
+	}
+	rec := data[3:]
+	if len(rec) < 4 {
+		return false, false
+	}
+	attrID := uint16(rec[0]) | uint16(rec[1])<<8
+	dataType := rec[2]
+	if attrID != 0x0000 || dataType != 0x10 { // 0x10 = boolean
+		return false, false
+	}
+	return rec[3] != 0x00, true
+}
+
+// deviceIDByAddr resolves a Zigbee IEEE address back to a configured device id.
+func (d *Driver) deviceIDByAddr(addr zigbee.IEEEAddress) string {
+	for _, dev := range d.reg.List() {
+		if dev.Integration != domain.Zigbee {
+			continue
+		}
+		if a, err := parseIEEE(dev.Addr); err == nil && a == addr {
+			return dev.ID
+		}
+	}
+	return ""
 }
