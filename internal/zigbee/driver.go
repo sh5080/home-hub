@@ -154,6 +154,9 @@ func (d *Driver) handleIncoming(e zigbee.NodeIncomingMessageEvent) {
 		return
 	}
 	on, ok := parseOnOffReport(msg.Data)
+	if !ok && isLumi(e.IEEEAddress) {
+		on, ok = aqaraOnOff(msg.Data) // Xiaomi/Aqara manufacturer-specific report
+	}
 	if !ok {
 		return
 	}
