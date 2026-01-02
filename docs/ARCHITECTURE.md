@@ -217,13 +217,15 @@ WantedBy=multi-user.target
 
 ## 11. 로드맵
 
-| 단계 | 내용 | 완료 기준 |
-|---|---|---|
-| 0 | 스켈레톤: domain + bus + registry + config | 기기 목록 로드/로그 |
-| 1 | Zigbee + HAP: 스위치 1개 On/Off | HomeKit에서 제어 |
-| 2 | Zigbee 다기기 + 물리버튼 상태 반영 | 양방향 동기화 |
-| 3 | 내장 MQTT + ESP32 연동 | HomeKit에 등장 |
-| 4 | 추가 ESP32 기기(팬 등) | 제어 |
-| 5 | Automation 엔진 + Matter 위임 트리거 | 규칙 동작 |
-| 6 | systemd 배포 + 안정화 | 상시 구동 |
-| (병렬) | `go-matter` R&D (M0→M6) | M4 시 위임→네이티브 스왑 |
+| 단계 | 내용 | 완료 기준 | 상태 |
+|---|---|---|---|
+| 0 | 스켈레톤: domain + bus + registry + config | 기기 목록 로드/로그 | ✅ 완료 |
+| 1 | Zigbee + HAP: 스위치 1개 On/Off | HomeKit에서 제어 | ✅ 코드 완료 (HW 검증 대기) |
+| 2 | Zigbee 다기기 + 물리버튼 상태 반영 | 양방향 동기화 | ⬜ |
+| 3 | 내장 MQTT + ESP32 연동 | HomeKit에 등장 | ⬜ |
+| 4 | 추가 ESP32 기기(팬 등) | 제어 | ⬜ |
+| 5 | Automation 엔진 + Matter 위임 트리거 | 규칙 동작 | 🔶 배선 완료 |
+| 6 | systemd 배포 + 안정화 | 상시 구동 | ⬜ |
+| (병렬) | `go-matter` R&D (M0→M6) | M4 시 위임→네이티브 스왑 | ⬜ |
+
+**Stage 1 상태**: HAP 브리지(brutella/hap)와 Zigbee 코디네이터(shimmeringbee/zstack) 연동 코드가 컴파일·단위테스트를 통과했다. 실제 On/Off 동작은 Zigbee 동글 + Aqara 스위치 + iPhone 페어링으로 검증이 남아 있다. Matter 위임(가상 트리거)과 automation 규칙 배선은 완료되어 어댑터 위에서 바로 흐른다.
