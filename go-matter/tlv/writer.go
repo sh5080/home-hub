@@ -192,6 +192,16 @@ func (w *Writer) EndContainer() {
 	w.depth--
 }
 
+// Raw appends already-encoded TLV element bytes at the current position. The
+// caller is responsible for supplying well-formed elements whose tags are valid
+// in the current container. It is an escape hatch for embedding opaque,
+// pre-encoded payloads (e.g. cluster command fields).
+func (w *Writer) Raw(b []byte) {
+	if w.err == nil {
+		w.buf = append(w.buf, b...)
+	}
+}
+
 // Bytes returns the encoding, failing if containers are unbalanced or any
 // earlier Put call failed.
 func (w *Writer) Bytes() ([]byte, error) {
