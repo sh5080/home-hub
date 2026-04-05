@@ -9,6 +9,7 @@ import (
 
 	"github.com/sh5080/go-matter/cert"
 	"github.com/sh5080/go-matter/crypto"
+	"github.com/sh5080/go-matter/session"
 )
 
 // Fabric identifies the operational fabric the controller belongs to.
@@ -192,6 +193,23 @@ func (in *Initiator) SessionKeys() (*SessionKeys, error) {
 		return nil, fmt.Errorf("casesession: handshake not complete")
 	}
 	return deriveSessionKeys(in.sharedSecret, in.fabric.IPK, in.hash.Sum(nil))
+}
+
+// SecureSession builds the operational secure session for the completed
+// handshake. The controller transmits with the I2R key and receives with R2I,
+// addressing messages to the responder's session id.
+func (in *Initiator) SecureSession() (*session.Secure, error) {
+	keys, err := in.SessionKeys()
+	if err != nil {
+		return nil, err
+	}
+	selfNOC, err := cert.Decode(in.self.NOC)
+	if err != nil {
+		return nil, err
+	}
+	selfNode, _ := selfNOC.Subject.NodeID()
+	return session.NewSecure(in.localSessionID, in.sigma2.ResponderSessionID,
+		selfNode, in.peerNodeID, keys.I2R, keys.R2I, 0)
 }
 
 // encryptTBE seals a TBE payload (empty additional data, per Matter).

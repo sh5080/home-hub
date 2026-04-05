@@ -9,6 +9,7 @@ import (
 
 	"github.com/sh5080/go-matter/cert"
 	"github.com/sh5080/go-matter/crypto"
+	"github.com/sh5080/go-matter/session"
 )
 
 // Responder implements the device side of the CASE handshake. The hub is only
@@ -24,6 +25,9 @@ type Responder struct {
 	hash            hash.Hash
 	initiatorEph    []byte
 	sharedSecret    []byte
+
+	initiatorSessionID uint16
+	initiatorNodeID    uint64
 }
 
 // NewResponder prepares a device-side handshake. localSessionID is the id the
@@ -42,6 +46,7 @@ func (rd *Responder) HandleSigma1(sigma1Bytes []byte) ([]byte, error) {
 		return nil, err
 	}
 	rd.initiatorEph = s1.InitiatorEphPubKey
+	rd.initiatorSessionID = s1.InitiatorSessionID
 	rd.hash.Write(sigma1Bytes) // transcript covers Sigma1
 
 	// TODO(responder): verify s1.DestinationID resolves to one of our
@@ -136,9 +141,26 @@ func (rd *Responder) HandleSigma3(sigma3Bytes []byte) error {
 	if err := crypto.VerifyECDSA(initNOC.PublicKey, tbs, tbe3.Signature); err != nil {
 		return fmt.Errorf("casesession: initiator signature: %w", err)
 	}
+	rd.initiatorNodeID, _ = initNOC.Subject.NodeID()
 
 	rd.hash.Write(sigma3Bytes) // transcript covers Sigma1||Sigma2||Sigma3
 	return nil
+}
+
+// SecureSession builds the operational secure session for the completed
+// handshake. The responder transmits with R2I and receives with I2R.
+func (rd *Responder) SecureSession() (*session.Secure, error) {
+	keys, err := rd.SessionKeys()
+	if err != nil {
+		return nil, err
+	}
+	selfNOC, err := cert.Decode(rd.self.NOC)
+	if err != nil {
+		return nil, err
+	}
+	selfNode, _ := selfNOC.Subject.NodeID()
+	return session.NewSecure(rd.localSessionID, rd.initiatorSessionID,
+		selfNode, rd.initiatorNodeID, keys.R2I, keys.I2R, 0)
 }
 
 // SessionKeys returns the operational session keys once the handshake completes.
