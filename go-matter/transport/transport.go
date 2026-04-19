@@ -39,8 +39,15 @@ func NewPipe() (a, b *Pipe) {
 	return a, b
 }
 
-// Send delivers a copy of datagram to the peer.
+// Send delivers a copy of datagram to the peer. A closed pipe is reported
+// before attempting delivery so Send is deterministic after Close (a plain
+// select could otherwise pick a still-buffered send over the closed channel).
 func (p *Pipe) Send(datagram []byte) error {
+	select {
+	case <-p.closed:
+		return ErrClosed
+	default:
+	}
 	cp := append([]byte(nil), datagram...)
 	select {
 	case p.send <- cp:
@@ -51,7 +58,13 @@ func (p *Pipe) Send(datagram []byte) error {
 }
 
 // Receive blocks for the next datagram, until ctx is done or the pipe closes.
+// Already-buffered datagrams are drained before reporting closure.
 func (p *Pipe) Receive(ctx context.Context) ([]byte, error) {
+	select {
+	case b := <-p.recv:
+		return b, nil
+	default:
+	}
 	select {
 	case b := <-p.recv:
 		return b, nil
