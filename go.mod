@@ -11,12 +11,15 @@ require (
 	gopkg.in/yaml.v3 v3.0.1
 )
 
+require filippo.io/nistec v0.0.4 // indirect
+
 require (
 	github.com/brutella/dnssd v1.2.14 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/go-chi/chi v1.5.4 // indirect
 	github.com/miekg/dns v1.1.61 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
+	github.com/sh5080/go-matter v0.0.0
 	github.com/shimmeringbee/bytecodec v0.0.0-20240614104652-9d31c74dcd13 // indirect
 	github.com/shimmeringbee/logwrap v0.1.3 // indirect
 	github.com/shimmeringbee/retry v0.0.0-20240614104711-064c2726a8b4 // indirect
@@ -37,3 +40,5 @@ require (
 	golang.org/x/tools v0.22.0 // indirect
 	gopkg.in/Regis24GmbH/go-diacritics.v2 v2.0.3 // indirect
 )
+
+replace github.com/sh5080/go-matter => ./go-matter
