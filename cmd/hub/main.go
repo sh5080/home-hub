@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/sh5080/home-hub/internal/automation"
 	"github.com/sh5080/home-hub/internal/bus"
@@ -82,12 +83,35 @@ func main() {
 		Storage: cfg.HomeKit.Storage,
 	}, b, reg, log)
 
-	// Matter devices are delegated to HomeKit via virtual trigger switches and
-	// tracked in a registry so automations/HomeKit can target them later.
+	// Matter devices are either controlled natively by the hub (driver:
+	// go-matter, over a CASE session) or delegated to HomeKit via virtual
+	// trigger switches. Both are tracked in a registry so automations/HomeKit
+	// can target them uniformly.
 	matterReg := matter.NewRegistry()
+	var gmDrivers []*matter.GoMatterDriver
 	for _, dc := range cfg.Devices {
 		if dc.Integration != domain.Matter {
 			continue
+		}
+		if dc.Driver == "go-matter" && dc.GoMatter != nil {
+			// Bound the commissioning-time dial so a missing device cannot stall startup.
+			dialCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			gm, err := matter.DialGoMatter(dialCtx, matter.GoMatterConfig{
+				FabricStore: dc.GoMatter.FabricStore,
+				NodeID:      dc.GoMatter.NodeID,
+				Address:     dc.GoMatter.Address,
+				Endpoint:    dc.GoMatter.Endpoint,
+			})
+			cancel()
+			if err == nil {
+				matterReg.Set(dc.ID, gm)
+				gmDrivers = append(gmDrivers, gm)
+				log.Info("matter device natively controlled", "id", dc.ID, "addr", dc.GoMatter.Address)
+				continue
+			}
+			// Fall back to delegation so a single unreachable device does not take
+			// the hub down; it can still be driven through HomeKit triggers.
+			log.Error("go-matter dial failed; falling back to delegated", "id", dc.ID, "err", err)
 		}
 		pressOpen := hk.RegisterTrigger(dc.Triggers["open"])
 		pressClose := hk.RegisterTrigger(dc.Triggers["close"])
@@ -172,5 +196,10 @@ func main() {
 	}
 	log.Info("home hub started")
 	wg.Wait()
+	for _, gm := range gmDrivers {
+		if err := gm.Shutdown(); err != nil {
+			log.Error("close matter session", "err", err)
+		}
+	}
 	log.Info("home hub stopped")
 }

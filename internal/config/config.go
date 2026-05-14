@@ -44,6 +44,16 @@ type DeviceConfig struct {
 	Driver string `yaml:"driver,omitempty"` // "delegated" | "go-matter"
 	// Matter delegated-only: action -> HAP virtual trigger switch id.
 	Triggers map[string]string `yaml:"triggers,omitempty"`
+	// Matter go-matter-only: how to reach the natively-controlled device.
+	GoMatter *GoMatterDevice `yaml:"gomatter,omitempty"`
+}
+
+// GoMatterDevice locates a Matter device controlled natively by the hub.
+type GoMatterDevice struct {
+	FabricStore string `yaml:"fabricStore"` // path to fabric credentials
+	NodeID      uint64 `yaml:"nodeId"`      // device operational node id
+	Address     string `yaml:"address"`     // host:port (default port 5540)
+	Endpoint    uint16 `yaml:"endpoint"`    // window-covering endpoint
 }
 
 // RuleConfig declares an automation rule. Currently only "mirror" is supported,
@@ -80,6 +90,14 @@ func (c *Config) validate() error {
 			return fmt.Errorf("duplicate device id: %s", d.ID)
 		}
 		seen[d.ID] = true
+		if d.Driver == "go-matter" {
+			if d.GoMatter == nil {
+				return fmt.Errorf("device %s: driver go-matter requires a gomatter block", d.ID)
+			}
+			if d.GoMatter.FabricStore == "" || d.GoMatter.Address == "" || d.GoMatter.NodeID == 0 {
+				return fmt.Errorf("device %s: gomatter requires fabricStore, address and nodeId", d.ID)
+			}
+		}
 	}
 	for i, r := range c.Rules {
 		if r.Type != "mirror" {

@@ -31,6 +31,41 @@ func TestLoad(t *testing.T) {
 	}
 }
 
+func TestLoadGoMatter(t *testing.T) {
+	c, err := Load(filepath.Join("testdata", "gomatter.yaml"))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	d := c.Devices[0]
+	if d.Driver != "go-matter" || d.GoMatter == nil {
+		t.Fatalf("device = %+v", d)
+	}
+	if d.GoMatter.Address != "192.168.1.20:5540" || d.GoMatter.NodeID != 1 || d.GoMatter.Endpoint != 1 {
+		t.Fatalf("gomatter = %+v", d.GoMatter)
+	}
+}
+
+func TestLoadGoMatterMissingBlock(t *testing.T) {
+	c := &Config{Devices: []DeviceConfig{{
+		Device: domain.Device{ID: "blind1", Integration: domain.Matter},
+		Driver: "go-matter",
+	}}}
+	if err := c.validate(); err == nil {
+		t.Fatal("expected error: go-matter driver without a gomatter block")
+	}
+}
+
+func TestLoadGoMatterMissingFields(t *testing.T) {
+	c := &Config{Devices: []DeviceConfig{{
+		Device:   domain.Device{ID: "blind1", Integration: domain.Matter},
+		Driver:   "go-matter",
+		GoMatter: &GoMatterDevice{FabricStore: "/x", NodeID: 1}, // no address
+	}}}
+	if err := c.validate(); err == nil {
+		t.Fatal("expected error: gomatter missing address")
+	}
+}
+
 func TestLoadDuplicateID(t *testing.T) {
 	if _, err := Load(filepath.Join("testdata", "dup.yaml")); err == nil {
 		t.Fatal("expected error for duplicate device id")

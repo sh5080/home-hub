@@ -60,6 +60,9 @@ func (d *GoMatterDriver) SetLiftPercent(p int) error {
 	return d.invoke(cmd)
 }
 
+// Shutdown releases the underlying CASE session and its transport.
+func (d *GoMatterDriver) Shutdown() error { return d.session.Close() }
+
 // LiftPercent reads the current lift position (0..100).
 func (d *GoMatterDriver) LiftPercent() (int, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), d.timeout)
