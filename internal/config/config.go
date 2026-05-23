@@ -94,8 +94,9 @@ func (c *Config) validate() error {
 			if d.GoMatter == nil {
 				return fmt.Errorf("device %s: driver go-matter requires a gomatter block", d.ID)
 			}
-			if d.GoMatter.FabricStore == "" || d.GoMatter.Address == "" || d.GoMatter.NodeID == 0 {
-				return fmt.Errorf("device %s: gomatter requires fabricStore, address and nodeId", d.ID)
+			// Address is optional: when empty the device is resolved over mDNS.
+			if d.GoMatter.FabricStore == "" || d.GoMatter.NodeID == 0 {
+				return fmt.Errorf("device %s: gomatter requires fabricStore and nodeId", d.ID)
 			}
 		}
 	}

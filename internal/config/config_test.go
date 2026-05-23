@@ -59,10 +59,22 @@ func TestLoadGoMatterMissingFields(t *testing.T) {
 	c := &Config{Devices: []DeviceConfig{{
 		Device:   domain.Device{ID: "blind1", Integration: domain.Matter},
 		Driver:   "go-matter",
-		GoMatter: &GoMatterDevice{FabricStore: "/x", NodeID: 1}, // no address
+		GoMatter: &GoMatterDevice{Address: "192.168.1.20:5540"}, // no fabricStore/nodeId
 	}}}
 	if err := c.validate(); err == nil {
-		t.Fatal("expected error: gomatter missing address")
+		t.Fatal("expected error: gomatter missing fabricStore and nodeId")
+	}
+}
+
+func TestLoadGoMatterAddressOptional(t *testing.T) {
+	// No address is valid: the device is resolved over mDNS by node id.
+	c := &Config{Devices: []DeviceConfig{{
+		Device:   domain.Device{ID: "blind1", Integration: domain.Matter},
+		Driver:   "go-matter",
+		GoMatter: &GoMatterDevice{FabricStore: "/x/fabric.json", NodeID: 1},
+	}}}
+	if err := c.validate(); err != nil {
+		t.Fatalf("address-less gomatter should validate: %v", err)
 	}
 }
 
