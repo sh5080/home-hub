@@ -142,6 +142,9 @@ func main() {
 	log.Info("automation rules loaded", "count", len(cfg.Rules))
 	hz := health.New(*healthAddr, log)
 
+	// Poll native Matter devices so external state changes reach HomeKit.
+	matterPoller := matter.NewPoller(matterReg, b.PublishEvent, 30*time.Second, log)
+
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
@@ -185,7 +188,7 @@ func main() {
 
 	// Start long-running components.
 	var wg sync.WaitGroup
-	for _, r := range []runnable{zb, mq, hk, auto, hz} {
+	for _, r := range []runnable{zb, mq, hk, auto, hz, matterPoller} {
 		wg.Add(1)
 		go func(r runnable) {
 			defer wg.Done()
