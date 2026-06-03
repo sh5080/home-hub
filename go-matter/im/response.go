@@ -19,6 +19,39 @@ const (
 	StatusUnsupportedCluster uint8 = 0xC3
 )
 
+// EncodeStatusResponse builds a StatusResponseMessage (Spec 10.6.11), used to
+// acknowledge a ReportData during a subscription.
+func EncodeStatusResponse(status uint8) ([]byte, error) {
+	w := tlv.NewWriter()
+	w.StartStructure(tlv.Anonymous())
+	w.PutUint(tlv.Context(0), uint64(status)) // Status
+	w.PutUint(tlv.Context(255), InteractionModelRevision)
+	w.EndContainer()
+	return w.Bytes()
+}
+
+// DecodeStatusResponse parses a StatusResponseMessage and returns its status.
+func DecodeStatusResponse(b []byte) (uint8, error) {
+	r := tlv.NewReader(b)
+	if !r.Next() || r.Type() != tlv.TypeStructure {
+		return 0, fmt.Errorf("im: expected structure")
+	}
+	if err := r.Enter(); err != nil {
+		return 0, err
+	}
+	var status uint8
+	for r.Next() {
+		if r.Tag().Num == 0 {
+			v, err := r.Uint()
+			if err != nil {
+				return 0, err
+			}
+			status = uint8(v)
+		}
+	}
+	return status, r.Err()
+}
+
 // CommandStatus is a per-command status result (CommandStatusIB + StatusIB).
 type CommandStatus struct {
 	Path   CommandPath
