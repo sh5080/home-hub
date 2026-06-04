@@ -129,6 +129,42 @@ func runSubscribeDevice(ctx context.Context, t *testing.T, tp transport.Transpor
 	}
 }
 
+func TestSubscribeListen(t *testing.T) {
+	fabric, ctrlID, devID := buildFabric(t)
+	ctrlPipe, devPipe := transport.NewPipe()
+	defer ctrlPipe.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	go runSubscribeDevice(ctx, t, devPipe, fabric, devID, 3700, []uint64{5000, 2500})
+
+	sess, err := New(fabric, ctrlID).Connect(ctx, ctrlPipe, devNode)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	sub, err := sess.Subscribe(ctx, []im.AttributePath{cluster.LiftPositionAttribute(1)}, 0, 10)
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+
+	got := make(chan float64, 2)
+	go sub.Listen(ctx, func(reports []im.AttributeReport) {
+		pct, _ := cluster.DecodeLiftPercent(reports[0].Data)
+		got <- pct
+	})
+
+	for _, want := range []float64{50, 25} {
+		select {
+		case v := <-got:
+			if v != want {
+				t.Fatalf("report = %g, want %g", v, want)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("timed out waiting for a pushed report")
+		}
+	}
+}
+
 func TestSubscribeSetup(t *testing.T) {
 	fabric, ctrlID, devID := buildFabric(t)
 	ctrlPipe, devPipe := transport.NewPipe()

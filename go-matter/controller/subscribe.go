@@ -93,6 +93,32 @@ func (s *Session) Subscribe(ctx context.Context, paths []im.AttributePath, minFl
 	return &Subscription{sess: s, ID: subID, MaxInterval: maxInterval, Initial: reports}, nil
 }
 
+// Listen delivers each subsequent report to onReport until ctx is cancelled or
+// the transport closes, acknowledging every report with a StatusResponse. It
+// owns the session's receive path for its lifetime (see Subscription docs), so
+// run it on a session dedicated to this subscription.
+func (sub *Subscription) Listen(ctx context.Context, onReport func([]im.AttributeReport)) error {
+	for {
+		ph, payload, err := sub.sess.recvIM(ctx)
+		if err != nil {
+			return err
+		}
+		if ph.Opcode != message.IMReportData {
+			continue // ignore anything that is not a report
+		}
+		_, reports, err := im.DecodeReportData(payload)
+		if err != nil {
+			return err
+		}
+		// Acknowledge on the exchange the report arrived on before invoking the
+		// callback, so a slow consumer cannot stall the subscription protocol.
+		if err := sub.sess.ackReport(ph.ExchangeID); err != nil {
+			return err
+		}
+		onReport(reports)
+	}
+}
+
 // ackReport sends a SUCCESS StatusResponse on exchange to acknowledge a report.
 func (s *Session) ackReport(exchange uint16) error {
 	ack, err := im.EncodeStatusResponse(im.StatusSuccess)
