@@ -89,6 +89,7 @@ func main() {
 	// can target them uniformly.
 	matterReg := matter.NewRegistry()
 	var gmDrivers []*matter.GoMatterDriver
+	var gmConfigs = map[string]matter.GoMatterConfig{} // native devices, for subscription
 	for _, dc := range cfg.Devices {
 		if dc.Integration != domain.Matter {
 			continue
@@ -106,6 +107,12 @@ func main() {
 			if err == nil {
 				matterReg.Set(dc.ID, gm)
 				gmDrivers = append(gmDrivers, gm)
+				gmConfigs[dc.ID] = matter.GoMatterConfig{
+					FabricStore: dc.GoMatter.FabricStore,
+					NodeID:      dc.GoMatter.NodeID,
+					Address:     dc.GoMatter.Address,
+					Endpoint:    dc.GoMatter.Endpoint,
+				}
 				log.Info("matter device natively controlled", "id", dc.ID, "addr", dc.GoMatter.Address)
 				continue
 			}
@@ -147,6 +154,27 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+
+	// Subscribe to native devices for push state updates on a dedicated session.
+	// Best-effort: if a device does not support subscribe, the poller still
+	// reflects its state.
+	var watchSessions []*matter.GoMatterDriver // reuse Shutdown() to close sessions
+	for id, gmc := range gmConfigs {
+		subCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		sess, sub, err := matter.SubscribeGoMatter(subCtx, gmc)
+		cancel()
+		if err != nil {
+			log.Warn("matter subscription unavailable; relying on poller", "id", id, "err", err)
+			continue
+		}
+		watchSessions = append(watchSessions, matter.NewGoMatterDriver(sess, gmc.Endpoint))
+		go func(id string) {
+			if err := matter.PublishReports(ctx, sub.Initial, sub.Listen, id, b.PublishEvent, log); err != nil && ctx.Err() == nil {
+				log.Error("matter subscription ended", "id", id, "err", err)
+			}
+		}(id)
+		log.Info("matter device subscribed", "id", id)
+	}
 
 	// Dispatch bus commands to the owning adapter.
 	go func() {
@@ -199,7 +227,7 @@ func main() {
 	}
 	log.Info("home hub started")
 	wg.Wait()
-	for _, gm := range gmDrivers {
+	for _, gm := range append(gmDrivers, watchSessions...) {
 		if err := gm.Shutdown(); err != nil {
 			log.Error("close matter session", "err", err)
 		}
