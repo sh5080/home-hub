@@ -30,7 +30,7 @@ in C++ (`connectedhomeip`), Python (`python-matter-server`), and TypeScript
 | `session` | Secure session encrypt/decrypt | ✅ |
 | `cert` | Matter operational certificates (TLV ↔ X.509 DER) | ✅ |
 | `casesession` | CASE (Sigma1/2/3) session establishment | ✅ |
-| `im` | Interaction Model: Invoke / Read | ✅ (Subscribe: planned) |
+| `im` | Interaction Model: Invoke / Read / Subscribe | ✅ |
 | `cluster` | Typed cluster commands and attributes | ✅ (On/Off, Window Covering, Level Control) |
 | `discovery` | mDNS operational discovery + resolve | ✅ (IPv4; IPv6 link-local zones: pending) |
 | `transport` | UDP transport + in-memory pipe for tests | ✅ |
@@ -54,6 +54,14 @@ defer sess.Close()
 sess.Invoke(ctx, cluster.OnOffOn(1))
 rep, _ := sess.ReadAttribute(ctx, cluster.OnOffAttribute(1))
 on, _ := cluster.DecodeOnOff(rep.Data)
+```
+
+Subscribe for push updates instead of polling:
+
+```go
+sub, _ := sess.Subscribe(ctx, []im.AttributePath{cluster.LiftPositionAttribute(1)}, 1, 60)
+for _, r := range sub.Initial { /* priming values */ }
+go sub.Listen(ctx, func(reports []im.AttributeReport) { /* streamed updates */ })
 ```
 
 Fabric credentials (root cert, controller NOC + key, IPK) are persisted via

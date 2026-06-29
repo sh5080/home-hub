@@ -161,38 +161,40 @@ type Driver interface {
   - `Open/Close` → HAP 가상 스위치를 순간 On → HomeKit 자동화 발동.
   - `SetLiftPercent/LiftPercent` → `ErrUnsupported`.
   - 전제: HomeKit 측에 트리거 자동화를 1회 수동 생성.
-- **향후: `GoMatterDriver` (`go-matter` 기반)**
-  - 동일 인터페이스를 실제 Matter로 구현 → 기기가 허브 소유의 first-class `Cover`가 됨(위치·상태 자유).
-  - 완성 시 config `driver: delegated → go-matter` 한 줄 교체.
+- **구현됨: `GoMatterDriver` (`go-matter` 기반)**
+  - 동일 인터페이스를 실제 Matter(CASE 세션)로 구현 → 기기가 허브 소유의 first-class `Cover`가 됨(위치·상태 자유).
+  - config `driver: go-matter` + `gomatter{ fabricStore, nodeId, address?, endpoint }` 로 활성화. `address` 생략 시 node id를 mDNS로 resolve.
+  - 상태는 전용 세션 **Subscribe**(푸시)로 반영하고, 미지원 기기는 30초 **폴링**으로 폴백.
+  - 기존 커미셔닝(chip-tool 등)으로 fabric에 온보딩된 기기가 전제(자체 커미셔닝은 미구현, §9 M6).
 
-> HomeKit 컨트롤러는 서드파티용 inbound 제어 API를 제공하지 않는다. 따라서 위임 드라이버는 **단방향 트리거**가 한계이며, 자유 제어는 `go-matter`가 준비돼야 가능하다.
+> HomeKit 컨트롤러는 서드파티용 inbound 제어 API를 제공하지 않는다. 따라서 위임 드라이버는 **단방향 트리거**가 한계이며, 자유 제어는 `go-matter` 네이티브 드라이버로 달성한다.
 
 ## 9. `go-matter` — 자체 Matter 컨트롤러 (from scratch)
 
 허브 코드와 분리된 **독립 Go 모듈**. `matter.Driver`를 통해서만 허브에 연결되므로 완성 전까지 허브는 위임 스텁으로 동작한다.
 
 **구성 방침**
-- 하위 배관(mDNS 디스커버리, TLV 인코딩, 메시지 프레임, BLE 등)은 기존 오픈소스(`cybergarage/go-matter`)에서 **재사용 가능한 부분을 차용**한다(원 라이선스·표기 준수).
-- 상위 핵심(**CASE 세션, 보안 채널/MRP, Interaction Model, 클러스터**)은 **신규 구현**한다. 스펙 해독은 `rs-matter` · `connectedhomeip(CHIP)` · `matter.js`를 레퍼런스로, 동작 검증은 `chip-tool`을 오라클로 사용한다.
+- 전 계층을 **0에서 신규 구현**한다(외부 Matter 스택 차용 없음). 의존성은 표준 라이브러리 + `golang.org/x/net`(mDNS wire) + `filippo.io/nistec`(P-256)로 제한.
+- 스펙 해독은 `connectedhomeip(CHIP)` · `matter.js`를 레퍼런스로, 각 프리미티브는 **공개 테스트 벡터**(RFC 3610/5869/7914/9383, 스펙 부록, 실제 CHIP 인증서)로 바이트 단위 검증한다.
 
 **마일스톤**
 
-| M | 내용 | 핵심/주의 |
+| M | 내용 | 상태 |
 |---|---|---|
-| M0 | `chip-tool`로 커미셔닝 + 자격증명 추출 (오라클 확보) | — |
-| M1 | operational mDNS 디스커버리 (`_matter._tcp`) | zeroconf |
-| M2 | **CASE 세션** (Sigma1/2/3) | P-256, HKDF, Matter TLV 인증서, AES-CCM |
-| M3 | 보안 메시지 레이어 + MRP | AES-CCM AEAD |
-| M4 | TLV + Interaction Model **Invoke** (예: WindowCovering) | 기기 실제 제어 |
-| M5 | 속성 **Subscribe** → 상태 읽기 | |
-| M6 | 자체 커미셔닝 (BLE + PASE/SPAKE2+ + DAC 검증) | chip-tool 졸업 |
+| M0 | `chip-tool`로 커미셔닝 + 자격증명 추출 (오라클) | 전제(수동) |
+| M1 | operational mDNS 디스커버리 (`_matter._tcp`) + resolve | ✅ |
+| M2 | **CASE 세션** (Sigma1/2/3, P-256/HKDF/TLV cert/AES-CCM) | ✅ |
+| M3 | 보안 메시지 레이어 (AES-CCM AEAD) | ✅ (MRP 재전송은 단순화) |
+| M4 | TLV + Interaction Model **Invoke/Read** (OnOff·WindowCovering·LevelControl) | ✅ |
+| M5 | 속성 **Subscribe** → 푸시 상태 | ✅ (setup + 스트리밍) |
+| M6 | 자체 커미셔닝 (PASE/SPAKE2+ + DAC 검증) | ⬜ (SPAKE2+ 프리미티브만 완료) |
 
 **크립토 주의**
 - **AES-CCM**은 Go 표준 라이브러리에 없음 → 외부 라이브러리 또는 직접 구현.
 - **SPAKE2+** 표준 라이브러리 없음 → 스펙 기반 직접 구현(M6).
 - Matter 인증서는 **compact-TLV** 포맷(≠ 평문 X.509 DER) → 자체 인코딩 필요.
 
-**시퀀싱** — operational 제어(M1~M5)를 먼저, 자체 커미셔닝(M6)을 뒤로. M0에서 chip-tool로 커미셔닝을 대신해 두면 최단 경로로 M4(실제 제어)에 도달한다.
+**시퀀싱** — operational 제어(M1~M5)를 먼저 완료했고, 자체 커미셔닝(M6)은 뒤로 둔다. 현재는 chip-tool로 커미셔닝한 기기를 `go-matter`가 resolve→CASE→Invoke/Read/Subscribe 한다. 하드웨어 실검증(실제 blind)은 남아 있다.
 
 ## 10. 배포
 
@@ -226,6 +228,6 @@ WantedBy=multi-user.target
 | 4 | 추가 ESP32 기기(팬 등) | 제어 | ⬜ |
 | 5 | Automation 엔진 + Matter 위임 트리거 | 규칙 동작 | 🔶 배선 완료 |
 | 6 | systemd 배포 + 안정화 | 상시 구동 | ⬜ |
-| (병렬) | `go-matter` R&D (M0→M6) | M4 시 위임→네이티브 스왑 | ⬜ |
+| (병렬) | `go-matter` operational 제어 (M1→M5) | 위임→네이티브 스왑 + 구독 상태 | ✅ 코드 완료 (HW 검증 대기) |
 
 **Stage 1 상태**: HAP 브리지(brutella/hap)와 Zigbee 코디네이터(shimmeringbee/zstack) 연동 코드가 컴파일·단위테스트를 통과했다. 실제 On/Off 동작은 Zigbee 동글 + Aqara 스위치 + iPhone 페어링으로 검증이 남아 있다. Matter 위임(가상 트리거)과 automation 규칙 배선은 완료되어 어댑터 위에서 바로 흐른다.
