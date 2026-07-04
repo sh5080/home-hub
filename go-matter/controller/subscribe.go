@@ -2,43 +2,20 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/sh5080/go-matter/im"
 	"github.com/sh5080/go-matter/message"
+	"github.com/sh5080/go-matter/session"
 )
-
-// sendIM encrypts and sends an IM message on the given exchange.
-func (s *Session) sendIM(opcode byte, exchange uint16, imPayload []byte) error {
-	proto := message.ProtoHeader{
-		Initiator: true, Reliable: true, Opcode: opcode,
-		ExchangeID: exchange, ProtocolID: message.ProtocolInteractionModel,
-	}
-	frame, err := s.secure.Encrypt(append(proto.Encode(), imPayload...))
-	if err != nil {
-		return err
-	}
-	return s.t.Send(frame)
-}
-
-// recvIM receives, decrypts, and decodes one IM message.
-func (s *Session) recvIM(ctx context.Context) (message.ProtoHeader, []byte, error) {
-	frame, err := s.t.Receive(ctx)
-	if err != nil {
-		return message.ProtoHeader{}, nil, err
-	}
-	payload, err := s.secure.Decrypt(frame)
-	if err != nil {
-		return message.ProtoHeader{}, nil, err
-	}
-	return message.DecodeProto(payload)
-}
 
 // Subscription is an active attribute subscription to a device.
 //
 // A subscription takes ownership of the session's receive path (reports arrive
 // unsolicited), so a session that is being Listen'd must not be used to Invoke
-// or Read concurrently — dedicate a session to the subscription.
+// or Read concurrently — dedicate a session to the subscription. Listen holds
+// the session mutex for its lifetime to enforce this.
 type Subscription struct {
 	sess        *Session
 	ID          uint32
@@ -51,79 +28,135 @@ type Subscription struct {
 // (SubscribeRequest → priming ReportData → StatusResponse → SubscribeResponse)
 // and returns the subscription with its initial attribute values.
 func (s *Session) Subscribe(ctx context.Context, paths []im.AttributePath, minFloor, maxCeiling uint16) (*Subscription, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	req, err := im.EncodeSubscribeRequest(paths, minFloor, maxCeiling, false, true)
 	if err != nil {
 		return nil, err
 	}
 	ex := s.nextExchange()
-	if err := s.sendIM(message.IMSubscribeRequest, ex, req); err != nil {
+	reqFrame, err := s.encryptProto(message.ProtoHeader{
+		Initiator: true, Reliable: true, Opcode: message.IMSubscribeRequest,
+		ExchangeID: ex, ProtocolID: message.ProtocolInteractionModel,
+	}, req)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.t.Send(reqFrame); err != nil {
 		return nil, err
 	}
 
 	// The device sends the priming ReportData with current values.
-	ph, payload, err := s.recvIM(ctx)
+	prime, err := s.exchangeRT(ctx, reqFrame, ex)
 	if err != nil {
 		return nil, err
 	}
-	if ph.Opcode != message.IMReportData {
-		return nil, fmt.Errorf("controller: expected priming ReportData, got opcode 0x%02x", ph.Opcode)
+	if prime.ph.Opcode != message.IMReportData {
+		return nil, fmt.Errorf("controller: expected priming ReportData, got opcode 0x%02x", prime.ph.Opcode)
 	}
-	_, reports, err := im.DecodeReportData(payload)
+	_, reports, err := im.DecodeReportData(prime.payload)
 	if err != nil {
 		return nil, err
 	}
 
-	// Acknowledge the report so the device finalizes the subscription.
-	if err := s.ackReport(ex); err != nil {
+	// Acknowledge the report (IM StatusResponse carrying the MRP ack) so the
+	// device finalizes the subscription. This is our exchange → Initiator true.
+	srFrame, err := s.statusResponseFrame(ex, true, prime.counter)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.t.Send(srFrame); err != nil {
 		return nil, err
 	}
 
 	// The device confirms with a SubscribeResponse (subscription id + interval).
-	ph, payload, err = s.recvIM(ctx)
+	resp, err := s.exchangeRT(ctx, srFrame, ex)
 	if err != nil {
 		return nil, err
 	}
-	if ph.Opcode != message.IMSubscribeResponse {
-		return nil, fmt.Errorf("controller: expected SubscribeResponse, got opcode 0x%02x", ph.Opcode)
+	if resp.ph.Opcode != message.IMSubscribeResponse {
+		return nil, fmt.Errorf("controller: expected SubscribeResponse, got opcode 0x%02x", resp.ph.Opcode)
 	}
-	subID, maxInterval, err := im.DecodeSubscribeResponse(payload)
+	subID, maxInterval, err := im.DecodeSubscribeResponse(resp.payload)
 	if err != nil {
+		return nil, err
+	}
+	if err := s.ackMsg(resp); err != nil {
 		return nil, err
 	}
 	return &Subscription{sess: s, ID: subID, MaxInterval: maxInterval, Initial: reports}, nil
 }
 
-// Listen delivers each subsequent report to onReport until ctx is cancelled or
-// the transport closes, acknowledging every report with a StatusResponse. It
-// owns the session's receive path for its lifetime (see Subscription docs), so
-// run it on a session dedicated to this subscription.
-func (sub *Subscription) Listen(ctx context.Context, onReport func([]im.AttributeReport)) error {
-	for {
-		ph, payload, err := sub.sess.recvIM(ctx)
-		if err != nil {
-			return err
-		}
-		if ph.Opcode != message.IMReportData {
-			continue // ignore anything that is not a report
-		}
-		_, reports, err := im.DecodeReportData(payload)
-		if err != nil {
-			return err
-		}
-		// Acknowledge on the exchange the report arrived on before invoking the
-		// callback, so a slow consumer cannot stall the subscription protocol.
-		if err := sub.sess.ackReport(ph.ExchangeID); err != nil {
-			return err
-		}
-		onReport(reports)
+// statusResponseFrame builds an encrypted IM StatusResponse(SUCCESS) on the
+// given exchange, piggybacking the MRP ack of ackCounter. initiator is our role
+// in that exchange: true when we opened it (subscription setup), false when the
+// device did (subsequent reports).
+func (s *Session) statusResponseFrame(exchangeID uint16, initiator bool, ackCounter uint32) ([]byte, error) {
+	payload, err := im.EncodeStatusResponse(im.StatusSuccess)
+	if err != nil {
+		return nil, err
 	}
+	return s.encryptProto(message.ProtoHeader{
+		Initiator: initiator, Reliable: true, Opcode: message.IMStatusResponse,
+		ExchangeID: exchangeID, ProtocolID: message.ProtocolInteractionModel,
+		AckPresent: true, AckCounter: ackCounter,
+	}, payload)
 }
 
-// ackReport sends a SUCCESS StatusResponse on exchange to acknowledge a report.
-func (s *Session) ackReport(exchange uint16) error {
-	ack, err := im.EncodeStatusResponse(im.StatusSuccess)
-	if err != nil {
-		return err
+// Listen delivers each subsequent report to onReport until ctx is cancelled or
+// the transport closes, acknowledging every report with a StatusResponse. It
+// holds the session for its whole lifetime (see Subscription docs), so run it
+// on a session dedicated to this subscription.
+func (sub *Subscription) Listen(ctx context.Context, onReport func([]im.AttributeReport)) error {
+	s := sub.sess
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	var lastReportCounter uint32
+	var lastResponse []byte // our StatusResponse to the last report, for re-sends
+	for {
+		m, err := s.recvMsg(ctx)
+		if errors.Is(err, session.ErrReplay) {
+			// The device retransmitted: our ack/StatusResponse was lost.
+			if lastResponse != nil && m.counter == lastReportCounter {
+				if serr := s.t.Send(lastResponse); serr != nil {
+					return serr
+				}
+			} else if aerr := s.ackMsg(m); aerr != nil {
+				return aerr
+			}
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if isStandaloneAck(m.ph) {
+			continue // ack of our previous StatusResponse
+		}
+		if m.ph.Opcode != message.IMReportData {
+			// Unexpected message on a dedicated subscription session; ack it so
+			// the device stops retransmitting, and keep listening.
+			if aerr := s.ackMsg(m); aerr != nil {
+				return aerr
+			}
+			continue
+		}
+		_, reports, err := im.DecodeReportData(m.payload)
+		if err != nil {
+			return err
+		}
+		// Reports arrive on device-initiated exchanges → our messages in them
+		// carry Initiator=false. Respond before invoking the callback so a slow
+		// consumer cannot stall the subscription protocol.
+		frame, err := s.statusResponseFrame(m.ph.ExchangeID, false, m.counter)
+		if err != nil {
+			return err
+		}
+		if err := s.t.Send(frame); err != nil {
+			return err
+		}
+		lastReportCounter, lastResponse = m.counter, frame
+		onReport(reports)
 	}
-	return s.sendIM(message.IMStatusResponse, exchange, ack)
 }

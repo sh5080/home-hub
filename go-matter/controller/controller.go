@@ -2,7 +2,9 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"sync"
 
 	"github.com/sh5080/go-matter/casesession"
 	"github.com/sh5080/go-matter/im"
@@ -43,11 +45,13 @@ func (c *Controller) Connect(ctx context.Context, t transport.Transport, peerNod
 	if err != nil {
 		return nil, err
 	}
-	if err := t.Send(frameUnsecured(0, exchangeID, true, message.SCCASESigma1, s1)); err != nil {
+	seen := make(map[uint32]bool) // peer message counters already processed
+
+	sigma1Frame := frameUnsecured(0, exchangeID, true, message.SCCASESigma1, s1)
+	if err := t.Send(sigma1Frame); err != nil {
 		return nil, err
 	}
-
-	proto2, sigma2, err := recvUnsecured(ctx, t)
+	hdr2, proto2, sigma2, err := awaitSC(ctx, t, sigma1Frame, seen)
 	if err != nil {
 		return nil, err
 	}
@@ -62,12 +66,16 @@ func (c *Controller) Connect(ctx context.Context, t transport.Transport, peerNod
 	if err != nil {
 		return nil, err
 	}
-	if err := t.Send(frameUnsecured(1, exchangeID, true, message.SCCASESigma3, s3)); err != nil {
+	// Sigma3 piggybacks the MRP acknowledgement of Sigma2.
+	sigma3Frame := frameUnsecuredAck(1, exchangeID, true, message.SCCASESigma3, s3, hdr2.Counter, true)
+	if err := t.Send(sigma3Frame); err != nil {
 		return nil, err
 	}
 
-	// The responder confirms the session with a SUCCESS StatusReport.
-	proto4, sr, err := recvUnsecured(ctx, t)
+	// The responder confirms the session with a SUCCESS StatusReport. A
+	// retransmitted Sigma2 (our Sigma3 was lost) is answered by awaitSC with the
+	// Sigma3 frame again.
+	hdr4, proto4, sr, err := awaitSC(ctx, t, sigma3Frame, seen)
 	if err != nil {
 		return nil, err
 	}
@@ -77,6 +85,8 @@ func (c *Controller) Connect(ctx context.Context, t transport.Transport, peerNod
 	if err := statusReportError(sr); err != nil {
 		return nil, err
 	}
+	// Standalone-ack the StatusReport so the responder can retire the exchange.
+	_ = t.Send(frameUnsecuredAck(2, exchangeID, true, message.SCStandaloneAck, nil, hdr4.Counter, true))
 
 	secure, err := in.SecureSession()
 	if err != nil {
@@ -85,12 +95,51 @@ func (c *Controller) Connect(ctx context.Context, t transport.Transport, peerNod
 	return &Session{secure: secure, t: t, exchange: exchangeID + 1}, nil
 }
 
-func recvUnsecured(ctx context.Context, t transport.Transport) (message.ProtoHeader, []byte, error) {
-	frame, err := t.Receive(ctx)
-	if err != nil {
-		return message.ProtoHeader{}, nil, err
+// awaitSC waits for a fresh (non-duplicate) Secure Channel message during the
+// CASE handshake. It retransmits `resend` — our last reliable frame — both on
+// timeout and when the peer retransmits a message we already processed, and it
+// skips standalone acks.
+func awaitSC(ctx context.Context, t transport.Transport, resend []byte, seen map[uint32]bool) (message.Header, message.ProtoHeader, []byte, error) {
+	retransmits := 0
+	for {
+		actx, cancel := context.WithTimeout(ctx, mrpInterval(retransmits))
+		frame, err := t.Receive(actx)
+		cancel()
+		if err != nil {
+			if ctx.Err() != nil {
+				return message.Header{}, message.ProtoHeader{}, nil, ctx.Err()
+			}
+			if errors.Is(err, context.DeadlineExceeded) {
+				if retransmits >= mrpMaxRetransmits {
+					return message.Header{}, message.ProtoHeader{}, nil,
+						errors.New("controller: handshake timed out after MRP retransmissions")
+				}
+				if serr := t.Send(resend); serr != nil {
+					return message.Header{}, message.ProtoHeader{}, nil, serr
+				}
+				retransmits++
+				continue
+			}
+			return message.Header{}, message.ProtoHeader{}, nil, err
+		}
+		hdr, ph, payload, perr := parseUnsecuredMsg(frame)
+		if perr != nil {
+			continue // not an unsecured SC message; ignore during handshake
+		}
+		if isStandaloneAck(ph) {
+			seen[hdr.Counter] = true
+			continue
+		}
+		if seen[hdr.Counter] {
+			// Peer retransmission: it missed our last frame (or its ack) — resend.
+			if serr := t.Send(resend); serr != nil {
+				return message.Header{}, message.ProtoHeader{}, nil, serr
+			}
+			continue
+		}
+		seen[hdr.Counter] = true
+		return hdr, ph, payload, nil
 	}
-	return parseUnsecured(frame)
 }
 
 func statusReportError(payload []byte) error {
@@ -105,9 +154,16 @@ func statusReportError(payload []byte) error {
 }
 
 // Session is an established operational session with a device.
+//
+// A Session is safe for concurrent use: every request/response round trip is
+// serialized by an internal mutex, so a command dispatcher and a state poller
+// can share it without interleaving frames or racing the counters. The
+// exception is an active Subscription, whose Listen owns the receive path for
+// its whole lifetime — dedicate a session to it (see Subscription docs).
 type Session struct {
 	secure   *session.Secure
 	t        transport.Transport
+	mu       sync.Mutex // serializes exchanges; protects exchange counter
 	exchange uint16
 }
 
@@ -117,29 +173,34 @@ func (s *Session) nextExchange() uint16 {
 	return e
 }
 
-// roundTrip encrypts and sends an IM message, then decrypts the response and
-// returns its protocol header and IM payload.
+// roundTrip sends an IM request and returns the response's protocol header and
+// IM payload, holding the session mutex for the whole exchange. Reliability is
+// handled by exchangeRT; the response itself is standalone-acked so the device
+// can retire it.
 func (s *Session) roundTrip(ctx context.Context, opcode byte, imPayload []byte) (message.ProtoHeader, []byte, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	exchangeID := s.nextExchange()
 	proto := message.ProtoHeader{
 		Initiator: true, Reliable: true, Opcode: opcode,
-		ExchangeID: s.nextExchange(), ProtocolID: message.ProtocolInteractionModel,
+		ExchangeID: exchangeID, ProtocolID: message.ProtocolInteractionModel,
 	}
-	frame, err := s.secure.Encrypt(append(proto.Encode(), imPayload...))
+	frame, err := s.encryptProto(proto, imPayload)
 	if err != nil {
 		return message.ProtoHeader{}, nil, err
 	}
 	if err := s.t.Send(frame); err != nil {
 		return message.ProtoHeader{}, nil, err
 	}
-	respFrame, err := s.t.Receive(ctx)
+	m, err := s.exchangeRT(ctx, frame, exchangeID)
 	if err != nil {
 		return message.ProtoHeader{}, nil, err
 	}
-	respPayload, err := s.secure.Decrypt(respFrame)
-	if err != nil {
+	if err := s.ackMsg(m); err != nil {
 		return message.ProtoHeader{}, nil, err
 	}
-	return message.DecodeProto(respPayload)
+	return m.ph, m.payload, nil
 }
 
 // Invoke sends a single command and returns its result.

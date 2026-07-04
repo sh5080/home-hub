@@ -82,20 +82,30 @@ func (s *Secure) Encrypt(payload []byte) ([]byte, error) {
 
 // Decrypt authenticates and decrypts a wire message addressed to this session.
 func (s *Secure) Decrypt(frame []byte) ([]byte, error) {
+	_, pt, err := s.DecryptMsg(frame)
+	return pt, err
+}
+
+// DecryptMsg authenticates and decrypts a wire message, also returning its
+// message counter (needed to build MRP acknowledgements). A message that
+// authenticates but fails the replay window is returned WITH its counter and
+// payload alongside ErrReplay, so the caller can re-acknowledge the
+// retransmission instead of failing.
+func (s *Secure) DecryptMsg(frame []byte) (uint32, []byte, error) {
 	hdr, rest, err := message.Decode(frame)
 	if err != nil {
-		return nil, err
+		return 0, nil, err
 	}
 	if hdr.SessionID != s.LocalSessionID {
-		return nil, fmt.Errorf("session: message for session %d, expected %d", hdr.SessionID, s.LocalSessionID)
+		return 0, nil, fmt.Errorf("session: message for session %d, expected %d", hdr.SessionID, s.LocalSessionID)
 	}
 	aad := frame[:len(frame)-len(rest)]
 	pt, err := s.recv.Open(nil, nonce(aad[3], hdr.Counter, s.PeerNodeID), rest, aad)
 	if err != nil {
-		return nil, err
+		return 0, nil, err
 	}
 	if err := s.rx.accept(hdr.Counter); err != nil {
-		return nil, err
+		return hdr.Counter, pt, err // authenticated duplicate: caller may re-ack
 	}
-	return pt, nil
+	return hdr.Counter, pt, nil
 }

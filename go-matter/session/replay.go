@@ -2,9 +2,14 @@ package session
 
 import "errors"
 
-// errReplay indicates a message counter that has already been accepted or is
-// older than the replay window.
-var errReplay = errors.New("session: replayed or stale message counter")
+// ErrReplay indicates a message counter that has already been accepted or is
+// older than the replay window. With MRP, a replayed counter usually means the
+// peer retransmitted because our acknowledgement was lost — callers should
+// re-acknowledge rather than treat it as a failure.
+var ErrReplay = errors.New("session: replayed or stale message counter")
+
+// errReplay is kept as an internal alias.
+var errReplay = ErrReplay
 
 // replayWindow rejects duplicate and stale message counters (Spec 4.6.7). It
 // keeps the highest counter accepted and a 32-bit bitmap of the counters

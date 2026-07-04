@@ -63,15 +63,17 @@ func caseAccept(ctx context.Context, t *testing.T, tp transport.Transport, fabri
 }
 
 // sendReport encrypts and sends a ReportData for one lift-percent value on the
-// given exchange, as a device would.
-func sendReport(t *testing.T, tp transport.Transport, secure *session.Secure, exchange uint16, subID uint32, value uint64) {
+// given exchange, as a device would. initiator reflects the device's role: the
+// priming report answers the controller's exchange (false); subsequent reports
+// open device-initiated exchanges (true).
+func sendReport(t *testing.T, tp transport.Transport, secure *session.Secure, exchange uint16, initiator bool, subID uint32, value uint64) {
 	t.Helper()
 	vw := tlv.NewWriter()
 	vw.PutUint(tlv.Anonymous(), value)
 	val, _ := vw.Bytes()
 	reports := []im.AttributeReport{{Path: cluster.LiftPositionAttribute(1), DataVersion: 1, Data: val}}
 	rd, _ := im.EncodeReportData(subID, reports, false)
-	rp := message.ProtoHeader{Opcode: message.IMReportData, ExchangeID: exchange, ProtocolID: message.ProtocolInteractionModel}
+	rp := message.ProtoHeader{Initiator: initiator, Reliable: true, Opcode: message.IMReportData, ExchangeID: exchange, ProtocolID: message.ProtocolInteractionModel}
 	frame, _ := secure.Encrypt(append(rp.Encode(), rd...))
 	tp.Send(frame)
 }
@@ -83,21 +85,31 @@ func runSubscribeDevice(ctx context.Context, t *testing.T, tp transport.Transpor
 	if secure == nil {
 		return
 	}
+	// recv returns the next non-ack IM message (standalone MRP acks and
+	// unsecured frames are transport chatter the device tolerates).
 	recv := func() (message.ProtoHeader, []byte) {
-		f, err := tp.Receive(ctx)
-		if err != nil {
-			return message.ProtoHeader{}, nil
+		for {
+			f, err := tp.Receive(ctx)
+			if err != nil {
+				return message.ProtoHeader{}, nil
+			}
+			if isUnsecuredFrame(f) {
+				continue
+			}
+			payload, err := secure.Decrypt(f)
+			if err != nil {
+				t.Errorf("device decrypt: %v", err)
+				return message.ProtoHeader{}, nil
+			}
+			ph, imb, err := message.DecodeProto(payload)
+			if err != nil {
+				t.Errorf("device proto: %v", err)
+			}
+			if isStandaloneAck(ph) {
+				continue
+			}
+			return ph, imb
 		}
-		payload, err := secure.Decrypt(f)
-		if err != nil {
-			t.Errorf("device decrypt: %v", err)
-			return message.ProtoHeader{}, nil
-		}
-		ph, imb, err := message.DecodeProto(payload)
-		if err != nil {
-			t.Errorf("device proto: %v", err)
-		}
-		return ph, imb
 	}
 
 	// Subscribe setup.
@@ -107,24 +119,45 @@ func runSubscribeDevice(ctx context.Context, t *testing.T, tp transport.Transpor
 		return
 	}
 	subEx := ph.ExchangeID
-	sendReport(t, tp, secure, subEx, 1, primeVal) // priming report
+	sendReport(t, tp, secure, subEx, false, 1, primeVal) // priming report (their exchange)
 
-	if ph, _ = recv(); ph.Opcode != message.IMStatusResponse {
+	ph, _ = recv()
+	if ph.Opcode != message.IMStatusResponse {
 		t.Errorf("device: expected StatusResponse ack, got 0x%02x", ph.Opcode)
 		return
+	}
+	// Setup runs on the controller-initiated exchange → its StatusResponse must
+	// carry Initiator=true and acknowledge our report.
+	if !ph.Initiator {
+		t.Error("device: setup StatusResponse must have Initiator=true")
+	}
+	if !ph.AckPresent {
+		t.Error("device: setup StatusResponse must piggyback an MRP ack")
 	}
 	resp, _ := im.EncodeSubscribeResponse(1, 5)
 	rp := message.ProtoHeader{Opcode: message.IMSubscribeResponse, ExchangeID: subEx, ProtocolID: message.ProtocolInteractionModel}
 	frame, _ := secure.Encrypt(append(rp.Encode(), resp...))
 	tp.Send(frame)
 
-	// Subsequent device-initiated reports.
+	// Subsequent device-initiated reports: the controller answers on OUR
+	// exchange, so its StatusResponse must carry Initiator=false (it is not the
+	// exchange initiator there).
 	for i, v := range extra {
 		ex := uint16(0x8000 + i)
-		sendReport(t, tp, secure, ex, 1, v)
-		if ph, _ = recv(); ph.Opcode != message.IMStatusResponse {
+		sendReport(t, tp, secure, ex, true, 1, v)
+		ph, _ = recv()
+		if ph.Opcode != message.IMStatusResponse {
 			t.Errorf("device: expected ack for report %d, got 0x%02x", i, ph.Opcode)
 			return
+		}
+		if ph.Initiator {
+			t.Errorf("device: report %d StatusResponse must have Initiator=false", i)
+		}
+		if !ph.AckPresent {
+			t.Errorf("device: report %d StatusResponse must piggyback an MRP ack", i)
+		}
+		if ph.ExchangeID != ex {
+			t.Errorf("device: report %d ack on exchange %d, want %d", i, ph.ExchangeID, ex)
 		}
 	}
 }

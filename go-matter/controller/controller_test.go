@@ -6,6 +6,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"sync"
 	"testing"
 	"time"
 
@@ -27,7 +28,7 @@ const (
 )
 
 func u16p(v uint16) *uint16 { return &v }
-func u8p(v uint8) *uint8     { return &v }
+func u8p(v uint8) *uint8    { return &v }
 
 func genKey(t *testing.T) (scalar, pub []byte) {
 	t.Helper()
@@ -69,7 +70,7 @@ func buildFabric(t *testing.T) (casesession.Fabric, casesession.Identity, casese
 		SerialNumber: []byte{0x01}, SigAlgo: 1,
 		Issuer:    cert.DN{Attrs: []cert.Attr{{Tag: cert.DNMatterRCACID, Value: rootID}}},
 		NotBefore: 0x271b17ef, NotAfter: 0x4cb9b56e,
-		Subject:   cert.DN{Attrs: []cert.Attr{{Tag: cert.DNMatterRCACID, Value: rootID}}},
+		Subject:    cert.DN{Attrs: []cert.Attr{{Tag: cert.DNMatterRCACID, Value: rootID}}},
 		PubKeyAlgo: 1, CurveID: 1, PublicKey: rootPub,
 		Extensions: cert.Extensions{
 			BasicConstraints: &cert.BasicConstraints{IsCA: true, PathLen: u8p(1)},
@@ -154,6 +155,9 @@ func runDevice(ctx context.Context, t *testing.T, tp transport.Transport, fabric
 		if err != nil {
 			return
 		}
+		if isUnsecuredFrame(f) {
+			continue // e.g. the controller's CASE-completion standalone ack
+		}
 		payload, err := secure.Decrypt(f)
 		if err != nil {
 			t.Errorf("device decrypt: %v", err)
@@ -163,6 +167,9 @@ func runDevice(ctx context.Context, t *testing.T, tp transport.Transport, fabric
 		if err != nil {
 			t.Errorf("device proto: %v", err)
 			return
+		}
+		if isStandaloneAck(ph) {
+			continue // MRP ack of one of our responses
 		}
 		switch ph.Opcode {
 		case message.IMInvokeRequest:
@@ -184,6 +191,57 @@ func runDevice(ctx context.Context, t *testing.T, tp transport.Transport, fabric
 			tp.Send(frame)
 		}
 	}
+}
+
+// isUnsecuredFrame reports whether frame is an unsecured (session id 0)
+// message, such as a CASE-time standalone ack.
+func isUnsecuredFrame(frame []byte) bool {
+	hdr, _, err := message.Decode(frame)
+	return err == nil && hdr.SessionID == 0
+}
+
+// TestSessionConcurrentUse drives Invoke and ReadAttribute from multiple
+// goroutines at once: the session mutex must serialize the exchanges so no
+// response is delivered to the wrong caller and the counters do not race.
+// Run with -race.
+func TestSessionConcurrentUse(t *testing.T) {
+	fabric, ctrlID, devID := buildFabric(t)
+	ctrlPipe, devPipe := transport.NewPipe()
+	defer ctrlPipe.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	go runDevice(ctx, t, devPipe, fabric, devID)
+
+	sess, err := New(fabric, ctrlID).Connect(ctx, ctrlPipe, devNode)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+
+	var wg sync.WaitGroup
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 5; j++ {
+				cmd, _ := cluster.GoToLiftPercentage(1, 37)
+				if res, err := sess.Invoke(ctx, cmd); err != nil || res.Status == nil || res.Status.Status != im.StatusSuccess {
+					t.Errorf("concurrent invoke: %+v (%v)", res, err)
+					return
+				}
+				rep, err := sess.ReadAttribute(ctx, cluster.LiftPositionAttribute(1))
+				if err != nil {
+					t.Errorf("concurrent read: %v", err)
+					return
+				}
+				if pct, err := cluster.DecodeLiftPercent(rep.Data); err != nil || pct != 37 {
+					t.Errorf("concurrent read value: %g (%v)", pct, err)
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
 }
 
 func TestControllerConnectInvokeRead(t *testing.T) {
