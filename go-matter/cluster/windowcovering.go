@@ -60,9 +60,21 @@ func LiftPositionAttribute(endpoint uint16) im.AttributePath {
 }
 
 // DecodeLiftPercent converts a CurrentPositionLiftPercent100ths report value to
-// a percentage (0..100).
+// a percentage (0..100). The attribute is nullable — many coverings report null
+// while the position is unknown or the motor is moving — in which case ErrNull
+// is returned and the caller should skip the sample rather than fail.
 func DecodeLiftPercent(data []byte) (float64, error) {
-	v, err := im.DecodeUint(data)
+	r := tlv.NewReader(data)
+	if !r.Next() {
+		if err := r.Err(); err != nil {
+			return 0, err
+		}
+		return 0, fmt.Errorf("cluster: empty lift position report")
+	}
+	if r.Type() == tlv.TypeNull {
+		return 0, ErrNull
+	}
+	v, err := r.Uint()
 	if err != nil {
 		return 0, err
 	}

@@ -14,6 +14,7 @@ type fakeConn struct {
 	responses [][]byte
 	deadline  time.Time
 	writes    int
+	zone      string // source-address zone reported by ReadFrom
 }
 
 func (f *fakeConn) WriteTo(b []byte, _ net.Addr) (int, error) { f.writes++; return len(b), nil }
@@ -28,7 +29,8 @@ func (f *fakeConn) ReadFrom(b []byte) (int, net.Addr, error) {
 	pkt := f.responses[0]
 	f.responses = f.responses[1:]
 	n := copy(b, pkt)
-	return n, &net.UDPAddr{IP: net.IPv4(192, 168, 1, 20), Port: 5353}, nil
+	src := &net.UDPAddr{IP: net.ParseIP("fe80::1"), Port: 5353, Zone: f.zone}
+	return n, src, nil
 }
 
 func (f *fakeConn) SetReadDeadline(t time.Time) error { f.deadline = t; return nil }
@@ -43,7 +45,10 @@ func (timeoutErr) Temporary() bool { return true }
 func TestDiscoverMatch(t *testing.T) {
 	instance := "2906C908D115D362-CD5544AA7B13EF14"
 	addr := netip.MustParseAddr("fe80::1234:5678:9abc:def0")
-	conn := &fakeConn{responses: [][]byte{synthResponse(t, instance, "device1234.local.", 5540, addr)}}
+	conn := &fakeConn{
+		responses: [][]byte{synthResponse(t, instance, "device1234.local.", 5540, addr)},
+		zone:      "en0",
+	}
 
 	node, err := discover(context.Background(), conn, instance, mdnsIPv4)
 	if err != nil {
@@ -54,6 +59,20 @@ func TestDiscoverMatch(t *testing.T) {
 	}
 	if conn.writes < 1 {
 		t.Fatal("query was never sent")
+	}
+	// The link-local AAAA must be scoped with the arriving interface's zone,
+	// otherwise it cannot be dialed.
+	if len(node.Addrs) != 1 || node.Addrs[0].Zone() != "en0" {
+		t.Fatalf("addr zone not attached: %v", node.Addrs)
+	}
+}
+
+func TestAttachZoneSkipsRoutable(t *testing.T) {
+	// A global address must not be given a zone.
+	node := Node{Addrs: []netip.Addr{netip.MustParseAddr("2001:db8::1")}}
+	attachZone(&node, &net.UDPAddr{Zone: "en0"})
+	if node.Addrs[0].Zone() != "" {
+		t.Fatal("routable address must not be zoned")
 	}
 }
 

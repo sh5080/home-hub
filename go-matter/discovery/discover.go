@@ -70,7 +70,7 @@ func discover(ctx context.Context, conn packetConn, instanceName string, group n
 		}
 		_ = conn.SetReadDeadline(read)
 
-		n, _, err := conn.ReadFrom(buf)
+		n, src, err := conn.ReadFrom(buf)
 		if err != nil {
 			if isTimeout(err) {
 				if !time.Now().Before(overall) {
@@ -84,6 +84,7 @@ func discover(ctx context.Context, conn packetConn, instanceName string, group n
 			return Node{}, err
 		}
 		if node, perr := ParseResponse(instanceName, buf[:n]); perr == nil {
+			attachZone(&node, src)
 			return node, nil
 		}
 		// Unrelated packet (another service, our own query echoed back) — keep listening.
@@ -93,4 +94,21 @@ func discover(ctx context.Context, conn packetConn, instanceName string, group n
 func isTimeout(err error) bool {
 	var ne net.Error
 	return errors.As(err, &ne) && ne.Timeout()
+}
+
+// attachZone fixes up link-local IPv6 addresses in node with the zone
+// (interface) the mDNS response arrived on. AAAA records carry only the bare
+// fe80:: address; without the scope zone it cannot be dialed. The zone is
+// implied by the receiving interface, which src (the sender's address on that
+// interface) carries.
+func attachZone(node *Node, src net.Addr) {
+	ua, ok := src.(*net.UDPAddr)
+	if !ok || ua.Zone == "" {
+		return
+	}
+	for i, a := range node.Addrs {
+		if a.Is6() && a.IsLinkLocalUnicast() && a.Zone() == "" {
+			node.Addrs[i] = a.WithZone(ua.Zone)
+		}
+	}
 }

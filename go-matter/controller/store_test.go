@@ -48,7 +48,7 @@ func TestStoredFabricBuild(t *testing.T) {
 		SerialNumber: []byte{0x01}, SigAlgo: 1,
 		Issuer:    cert.DN{Attrs: []cert.Attr{{Tag: cert.DNMatterRCACID, Value: rootID}}},
 		NotBefore: 0x271b17ef, NotAfter: 0x4cb9b56e,
-		Subject:   cert.DN{Attrs: []cert.Attr{{Tag: cert.DNMatterRCACID, Value: rootID}}},
+		Subject:    cert.DN{Attrs: []cert.Attr{{Tag: cert.DNMatterRCACID, Value: rootID}}},
 		PubKeyAlgo: 1, CurveID: 1, PublicKey: rootPub,
 		Extensions: cert.Extensions{
 			BasicConstraints: &cert.BasicConstraints{IsCA: true, PathLen: u8p(1)},

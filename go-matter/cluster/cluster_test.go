@@ -1,6 +1,7 @@
 package cluster
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/sh5080/go-matter/im"
@@ -70,5 +71,13 @@ func TestDecodeReportValues(t *testing.T) {
 	on, err := DecodeOnOff(onData)
 	if err != nil || !on {
 		t.Fatalf("onoff = %v (%v)", on, err)
+	}
+
+	// A null lift position (covering in motion) must decode to ErrNull.
+	nw := tlv.NewWriter()
+	nw.PutNull(tlv.Anonymous())
+	nullData, _ := nw.Bytes()
+	if _, err := DecodeLiftPercent(nullData); !errors.Is(err, ErrNull) {
+		t.Fatalf("null lift err = %v, want ErrNull", err)
 	}
 }

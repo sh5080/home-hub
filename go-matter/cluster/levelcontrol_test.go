@@ -1,6 +1,7 @@
 package cluster
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/sh5080/go-matter/tlv"
@@ -48,13 +49,12 @@ func TestDecodeLevel(t *testing.T) {
 		t.Fatalf("level = %d (%v)", lvl, err)
 	}
 
-	// A null CurrentLevel decodes to -1.
+	// A null CurrentLevel decodes to ErrNull.
 	nw := tlv.NewWriter()
 	nw.PutNull(tlv.Anonymous())
 	nullData, _ := nw.Bytes()
-	lvl, err = DecodeLevel(nullData)
-	if err != nil || lvl != -1 {
-		t.Fatalf("null level = %d (%v)", lvl, err)
+	if _, err = DecodeLevel(nullData); !errors.Is(err, ErrNull) {
+		t.Fatalf("null level err = %v, want ErrNull", err)
 	}
 }
 

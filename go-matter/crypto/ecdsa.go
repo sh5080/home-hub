@@ -78,3 +78,15 @@ func PublicFromScalar(privScalar []byte) ([]byte, error) {
 	}
 	return pt.Bytes(), nil
 }
+
+// GenerateP256Scalar returns a fresh P-256 private key as a 32-byte big-endian
+// scalar — the key format used across this library.
+func GenerateP256Scalar() ([]byte, error) {
+	k, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return nil, err
+	}
+	scalar := make([]byte, 32)
+	k.D.FillBytes(scalar)
+	return scalar, nil
+}

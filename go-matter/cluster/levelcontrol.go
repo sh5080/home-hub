@@ -54,7 +54,7 @@ func CurrentLevelAttribute(endpoint uint16) im.AttributePath {
 }
 
 // DecodeLevel converts a CurrentLevel report value (0..254) to an int. A null
-// value (device level undefined) is reported as -1.
+// value (device level undefined) is reported as ErrNull.
 func DecodeLevel(data []byte) (int, error) {
 	r := tlv.NewReader(data)
 	if !r.Next() {
@@ -64,7 +64,7 @@ func DecodeLevel(data []byte) (int, error) {
 		return 0, fmt.Errorf("cluster: empty CurrentLevel report")
 	}
 	if r.Type() == tlv.TypeNull {
-		return -1, nil
+		return 0, ErrNull
 	}
 	v, err := r.Uint()
 	if err != nil {

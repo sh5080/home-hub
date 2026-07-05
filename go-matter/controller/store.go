@@ -19,6 +19,10 @@ type StoredFabric struct {
 	RCAC          []byte `json:"rcac"`          // root certificate (Matter TLV)
 	ControllerNOC []byte `json:"controllerNoc"` // controller NOC (Matter TLV)
 	ControllerKey []byte `json:"controllerKey"` // 32-byte P-256 operational scalar (secret)
+	// RootKey is the CA signing scalar (secret). Present on fabrics generated
+	// by GenerateFabric; absent on fabrics imported from chip-tool (which keeps
+	// its CA key), in which case this hub cannot commission new devices.
+	RootKey []byte `json:"rootKey,omitempty"`
 }
 
 // Save writes the fabric to path with 0600 permissions.
