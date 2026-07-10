@@ -10,17 +10,26 @@ import (
 	"github.com/sh5080/home-hub/internal/domain"
 )
 
-// liftReport builds an AttributeReport carrying a lift position (percent).
-func liftReport(percent int) im.AttributeReport {
+// liftReport builds an AttributeReport carrying a raw Matter lift position
+// (percent, 0=open/100=closed) as a device would report it.
+func liftReport(matterPercent int) im.AttributeReport {
 	w := tlv.NewWriter()
-	w.PutUint(tlv.Anonymous(), uint64(percent*100)) // 100ths
+	w.PutUint(tlv.Anonymous(), uint64(matterPercent*100)) // 100ths
+	data, _ := w.Bytes()
+	return im.AttributeReport{Path: cluster.LiftPositionAttribute(1), DataVersion: 1, Data: data}
+}
+
+// nullLiftReport is a report with a null position (covering in motion).
+func nullLiftReport() im.AttributeReport {
+	w := tlv.NewWriter()
+	w.PutNull(tlv.Anonymous())
 	data, _ := w.Bytes()
 	return im.AttributeReport{Path: cluster.LiftPositionAttribute(1), DataVersion: 1, Data: data}
 }
 
 func TestPublishReports(t *testing.T) {
 	initial := []im.AttributeReport{liftReport(37)}
-	streamed := [][]im.AttributeReport{{liftReport(50)}, {liftReport(25)}}
+	streamed := [][]im.AttributeReport{{liftReport(50)}, {nullLiftReport()}, {liftReport(25)}}
 	listen := func(_ context.Context, on func([]im.AttributeReport)) error {
 		for _, r := range streamed {
 			on(r)
@@ -36,7 +45,9 @@ func TestPublishReports(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	want := []int{37, 50, 25} // priming, then two streamed updates
+	// Matter lift is inverted into domain positions (100-x); the null sample is
+	// skipped entirely.
+	want := []int{63, 50, 75}
 	if len(events) != len(want) {
 		t.Fatalf("events = %d, want %d", len(events), len(want))
 	}

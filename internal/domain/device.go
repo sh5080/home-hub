@@ -28,4 +28,12 @@ type Device struct {
 	Integration Integration `yaml:"integration"`
 	Type        DeviceType  `yaml:"type"`
 	Addr        string      `yaml:"addr"` // zigbee IEEE addr | mqtt topic | matter node id
+	// Endpoint distinguishes sub-units behind one address, e.g. the gangs of a
+	// multi-gang Zigbee wall switch (H2 2-gang: endpoints 1 and 2). 0 means the
+	// integration default (Zigbee: endpoint 1).
+	Endpoint uint8 `yaml:"endpoint,omitempty"`
+	// Decoupled requests decoupled mode on an Aqara Zigbee switch: the relay is
+	// detached from the paddle so pressing it emits a button event instead of
+	// toggling the load, letting a rule drive any device. Applied on join.
+	Decoupled bool `yaml:"decoupled,omitempty"`
 }

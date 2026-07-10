@@ -6,6 +6,7 @@ type Action string
 const (
 	ActionSetOn       Action = "set_on"
 	ActionSetPosition Action = "set_position"
+	ActionSetLevel    Action = "set_level" // brightness / fan speed, 0..100
 )
 
 // Command instructs an adapter to change a device.
@@ -23,4 +24,9 @@ func SetOn(id string, on bool) Command {
 // SetPosition builds a cover-position command (0..100).
 func SetPosition(id string, pct int) Command {
 	return Command{DeviceID: id, Action: ActionSetPosition, Value: pct}
+}
+
+// SetLevel builds a brightness/fan-speed command (0..100).
+func SetLevel(id string, level int) Command {
+	return Command{DeviceID: id, Action: ActionSetLevel, Value: level}
 }

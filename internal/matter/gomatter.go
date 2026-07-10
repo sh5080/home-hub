@@ -46,14 +46,17 @@ func (d *GoMatterDriver) Open() error { return d.invoke(cluster.UpOrOpen(d.endpo
 // Close moves the covering toward closed.
 func (d *GoMatterDriver) Close() error { return d.invoke(cluster.DownOrClose(d.endpoint)) }
 
-// SetLiftPercent moves the covering to p (0..100).
+// SetLiftPercent moves the covering to p in the hub's domain orientation
+// (HomeKit convention: 0 = fully closed, 100 = fully open).
 //
-// NOTE: HomeKit and Matter disagree on orientation — HomeKit TargetPosition uses
-// 0=closed/100=open, while Matter's lift percent uses 0=open/100=closed. If the
-// caller passes a HomeKit-oriented value, invert here (100-p). Kept as a direct
-// mapping until validated against the real blind.
+// Matter's lift percent runs the other way (Spec 5.3: 0 = fully open,
+// 100 = fully closed), so the driver inverts at this boundary. This keeps every
+// caller — applyMatter, the poller, subscriptions — in one consistent
+// orientation. If a specific covering turns out to be mounted/calibrated in
+// reverse, flip it in device config or here, in ONE place, after validating on
+// the hardware.
 func (d *GoMatterDriver) SetLiftPercent(p int) error {
-	cmd, err := cluster.GoToLiftPercentage(d.endpoint, float64(p))
+	cmd, err := cluster.GoToLiftPercentage(d.endpoint, float64(100-p))
 	if err != nil {
 		return err
 	}
@@ -63,7 +66,10 @@ func (d *GoMatterDriver) SetLiftPercent(p int) error {
 // Shutdown releases the underlying CASE session and its transport.
 func (d *GoMatterDriver) Shutdown() error { return d.session.Close() }
 
-// LiftPercent reads the current lift position (0..100).
+// LiftPercent reads the current position in domain orientation (0 = closed,
+// 100 = open), inverting Matter's lift percent. A cluster.ErrNull passes
+// through untouched: the covering does not know its position right now (e.g.
+// mid-motion) and the caller should skip the sample.
 func (d *GoMatterDriver) LiftPercent() (int, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), d.timeout)
 	defer cancel()
@@ -75,5 +81,5 @@ func (d *GoMatterDriver) LiftPercent() (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	return int(pct), nil
+	return 100 - int(pct), nil
 }

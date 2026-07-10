@@ -35,7 +35,7 @@ const (
 )
 
 func u16p(v uint16) *uint16 { return &v }
-func u8p(v uint8) *uint8     { return &v }
+func u8p(v uint8) *uint8    { return &v }
 
 func genKey(t *testing.T) (scalar, pub []byte) {
 	t.Helper()
@@ -77,7 +77,7 @@ func buildFabric(t *testing.T) (casesession.Fabric, casesession.Identity, casese
 		SerialNumber: []byte{0x01}, SigAlgo: 1,
 		Issuer:    cert.DN{Attrs: []cert.Attr{{Tag: cert.DNMatterRCACID, Value: tRootID}}},
 		NotBefore: 0x271b17ef, NotAfter: 0x4cb9b56e,
-		Subject:   cert.DN{Attrs: []cert.Attr{{Tag: cert.DNMatterRCACID, Value: tRootID}}},
+		Subject:    cert.DN{Attrs: []cert.Attr{{Tag: cert.DNMatterRCACID, Value: tRootID}}},
 		PubKeyAlgo: 1, CurveID: 1, PublicKey: rootPub,
 		Extensions: cert.Extensions{
 			BasicConstraints: &cert.BasicConstraints{IsCA: true, PathLen: u8p(1)},
@@ -178,6 +178,9 @@ func runWindowCovering(ctx context.Context, t *testing.T, tp transport.Transport
 		if err != nil {
 			return
 		}
+		if hdr, _, err := message.Decode(f); err == nil && hdr.SessionID == 0 {
+			continue // unsecured CASE-completion ack from the controller
+		}
 		payload, err := secure.Decrypt(f)
 		if err != nil {
 			return
@@ -185,6 +188,9 @@ func runWindowCovering(ctx context.Context, t *testing.T, tp transport.Transport
 		ph, imb, err := message.DecodeProto(payload)
 		if err != nil {
 			return
+		}
+		if ph.ProtocolID == message.ProtocolSecureChannel && ph.Opcode == message.SCStandaloneAck {
+			continue // MRP ack of one of our responses
 		}
 		switch ph.Opcode {
 		case message.IMInvokeRequest:
@@ -242,17 +248,19 @@ func TestGoMatterDriverControlsDevice(t *testing.T) {
 		t.Fatalf("LiftPercent = %d (%v), want 37", pct, err)
 	}
 
+	// Open drives Matter lift to 0 (fully open) = domain position 100.
 	if err := drv.Open(); err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	if pct, _ := drv.LiftPercent(); pct != 0 {
-		t.Fatalf("after Open, LiftPercent = %d, want 0", pct)
+	if pct, _ := drv.LiftPercent(); pct != 100 {
+		t.Fatalf("after Open, LiftPercent = %d, want 100 (open)", pct)
 	}
 
+	// Close drives Matter lift to 100% (fully closed) = domain position 0.
 	if err := drv.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-	if pct, _ := drv.LiftPercent(); pct != 100 {
-		t.Fatalf("after Close, LiftPercent = %d, want 100", pct)
+	if pct, _ := drv.LiftPercent(); pct != 0 {
+		t.Fatalf("after Close, LiftPercent = %d, want 0 (closed)", pct)
 	}
 }

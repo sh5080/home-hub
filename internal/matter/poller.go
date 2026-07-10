@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/sh5080/go-matter/cluster"
 	"github.com/sh5080/home-hub/internal/domain"
 )
 
@@ -55,6 +56,9 @@ func (p *Poller) pollOnce() {
 		if errors.Is(err, ErrUnsupported) {
 			continue // delegated device: no read-back
 		}
+		if errors.Is(err, cluster.ErrNull) {
+			continue // position unknown right now (e.g. mid-motion): no sample
+		}
 		if err != nil {
 			if p.log != nil {
 				p.log.Error("matter poll", "device", id, "err", err)
@@ -65,9 +69,8 @@ func (p *Poller) pollOnce() {
 			continue // unchanged since last poll
 		}
 		p.last[id] = pct
-		// NOTE: pct is the driver's lift percent, mapped directly onto the
-		// HomeKit-oriented Position. The orientation caveat in GoMatterDriver
-		// applies here too; keep both directions consistent when validated.
+		// pct is already domain-oriented (0=closed/100=open): the driver inverts
+		// Matter's lift percent at its boundary.
 		p.publish(domain.Event{
 			DeviceID: id,
 			Kind:     domain.EventStateChanged,

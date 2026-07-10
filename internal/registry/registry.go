@@ -54,12 +54,27 @@ func (r *Registry) List() []domain.Device {
 	return out
 }
 
-// SetState updates the cached state for a device.
+// SetState merges the reported fields into the cached state for a device.
+// Events carry only the fields that changed (an on/off report has no
+// position), so unset fields keep their last known value.
 func (r *Registry) SetState(id string, s domain.State) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if e, ok := r.entries[id]; ok {
-		e.state = s
+	e, ok := r.entries[id]
+	if !ok {
+		return
+	}
+	if s.On != nil {
+		e.state.On = s.On
+	}
+	if s.Position != nil {
+		e.state.Position = s.Position
+	}
+	if s.Level != nil {
+		e.state.Level = s.Level
+	}
+	if s.Value != nil {
+		e.state.Value = s.Value
 	}
 }
 
