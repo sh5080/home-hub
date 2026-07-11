@@ -29,6 +29,11 @@ type HomeKitConfig struct {
 // ZigbeeConfig configures the Zigbee coordinator.
 type ZigbeeConfig struct {
 	Port string `yaml:"port"`
+	// Storage directory for network + pairing persistence. Without it the hub
+	// forms a NEW network on every restart and all devices must re-pair.
+	Storage string `yaml:"storage"`
+	// PermitJoin opens the network for pairing. Enable only while pairing.
+	PermitJoin bool `yaml:"permitJoin"`
 }
 
 // MQTTConfig configures the embedded MQTT broker.
@@ -56,12 +61,26 @@ type GoMatterDevice struct {
 	Endpoint    uint16 `yaml:"endpoint"`    // window-covering endpoint
 }
 
-// RuleConfig declares an automation rule. Currently only "mirror" is supported,
-// which mirrors the on/off state of Src onto Dst.
+// RuleConfig declares an automation rule.
+//
+//   - mirror:    mirror the on/off state of Src onto Dst.
+//   - button:    when Src emits a button event with Press, run Action on Dst
+//     (toggle | on | off | open | close | position, with Value for position).
+//   - threshold: hysteresis on a sensor value — Dst turns on at/above Above
+//     and off at/below Below (e.g. humidity → dehumidifier).
 type RuleConfig struct {
-	Type string `yaml:"type"` // "mirror"
+	Type string `yaml:"type"` // "mirror" | "button" | "threshold"
 	Src  string `yaml:"src"`
 	Dst  string `yaml:"dst"`
+
+	// button rules
+	Press  string `yaml:"press,omitempty"`  // single | double | hold
+	Action string `yaml:"action,omitempty"` // toggle | on | off | open | close | position
+	Value  int    `yaml:"value,omitempty"`  // position percent for action=position
+
+	// threshold rules
+	Above *float64 `yaml:"above,omitempty"`
+	Below *float64 `yaml:"below,omitempty"`
 }
 
 // Load reads and parses the config file at path.
@@ -90,26 +109,75 @@ func (c *Config) validate() error {
 			return fmt.Errorf("duplicate device id: %s", d.ID)
 		}
 		seen[d.ID] = true
-		if d.Driver == "go-matter" {
-			if d.GoMatter == nil {
-				return fmt.Errorf("device %s: driver go-matter requires a gomatter block", d.ID)
-			}
-			// Address is optional: when empty the device is resolved over mDNS.
-			if d.GoMatter.FabricStore == "" || d.GoMatter.NodeID == 0 {
-				return fmt.Errorf("device %s: gomatter requires fabricStore and nodeId", d.ID)
+		if d.Integration == domain.Matter {
+			if err := validateMatterDevice(d); err != nil {
+				return err
 			}
 		}
 	}
 	for i, r := range c.Rules {
-		if r.Type != "mirror" {
-			return fmt.Errorf("rule %d: unknown type %q", i, r.Type)
+		if err := validateRule(i, r, seen); err != nil {
+			return err
 		}
-		if !seen[r.Src] {
-			return fmt.Errorf("rule %d: unknown src device %q", i, r.Src)
+	}
+	return nil
+}
+
+func validateMatterDevice(d DeviceConfig) error {
+	switch d.Driver {
+	case "go-matter":
+		if d.GoMatter == nil {
+			return fmt.Errorf("device %s: driver go-matter requires a gomatter block", d.ID)
 		}
-		if !seen[r.Dst] {
-			return fmt.Errorf("rule %d: unknown dst device %q", i, r.Dst)
+		// Address is optional: when empty the device is resolved over mDNS.
+		if d.GoMatter.FabricStore == "" || d.GoMatter.NodeID == 0 {
+			return fmt.Errorf("device %s: gomatter requires fabricStore and nodeId", d.ID)
 		}
+	case "delegated", "":
+		// Delegation drives the device through HomeKit trigger automations, so
+		// both trigger switches must be named.
+		if d.Triggers["open"] == "" || d.Triggers["close"] == "" {
+			return fmt.Errorf("device %s: delegated matter device requires triggers.open and triggers.close", d.ID)
+		}
+	default:
+		return fmt.Errorf("device %s: unknown matter driver %q", d.ID, d.Driver)
+	}
+	return nil
+}
+
+func validateRule(i int, r RuleConfig, seen map[string]bool) error {
+	if !seen[r.Src] {
+		return fmt.Errorf("rule %d: unknown src device %q", i, r.Src)
+	}
+	if !seen[r.Dst] {
+		return fmt.Errorf("rule %d: unknown dst device %q", i, r.Dst)
+	}
+	switch r.Type {
+	case "mirror":
+	case "button":
+		switch r.Press {
+		case "single", "double", "hold":
+		default:
+			return fmt.Errorf("rule %d: button press must be single|double|hold, got %q", i, r.Press)
+		}
+		switch r.Action {
+		case "toggle", "on", "off", "open", "close":
+		case "position":
+			if r.Value < 0 || r.Value > 100 {
+				return fmt.Errorf("rule %d: position value %d out of range [0,100]", i, r.Value)
+			}
+		default:
+			return fmt.Errorf("rule %d: unknown button action %q", i, r.Action)
+		}
+	case "threshold":
+		if r.Above == nil || r.Below == nil {
+			return fmt.Errorf("rule %d: threshold requires above and below", i)
+		}
+		if *r.Above <= *r.Below {
+			return fmt.Errorf("rule %d: above (%g) must exceed below (%g) for hysteresis", i, *r.Above, *r.Below)
+		}
+	default:
+		return fmt.Errorf("rule %d: unknown type %q", i, r.Type)
 	}
 	return nil
 }

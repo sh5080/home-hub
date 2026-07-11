@@ -6,25 +6,61 @@ homekit:
 
 zigbee:
   port: /dev/ttyUSB0          # Zigbee coordinator (CC2652 family)
+  storage: "./zigbee-data"    # network + pairing persistence (REQUIRED for real use:
+                              # without it every restart forms a new network)
+  permitJoin: false           # enable only while pairing new devices
 
 mqtt:
-  listen: ":1883"             # embedded broker
+  listen: ":1883"             # embedded broker for ESP32 bridges
+                              # device topics: home/<id>/state (report), home/<id>/set (command)
 
 devices:
-  - {id: switch_1, name: "Switch 1", integration: zigbee, addr: "0x00158d0001abcd01", type: switch}
-  - {id: fan_1,    name: "Fan 1",    integration: mqtt,   addr: "home/room/fan",      type: fan}
-  - {id: cover_1,  name: "Cover 1",  integration: mqtt,   addr: "home/room/curtain",  type: cover}
+  # Multi-gang Zigbee wall switch: one device per gang, same address.
+  - {id: light_main,     name: "Main Light",     integration: zigbee, addr: "0x00158d0001abcd01", type: light, endpoint: 1}
+  - {id: light_ambient,  name: "Ambient Light",  integration: zigbee, addr: "0x00158d0001abcd01", type: light, endpoint: 2}
 
-  # Matter device: HomeKit-delegated for now; only virtual triggers are exposed.
+  # A wall switch used as a button controller (decoupled mode): its presses
+  # drive OTHER devices via the button rules below.
+  - {id: button_1, name: "Wall Button", integration: zigbee, addr: "0x00158d0001abcd02", type: switch}
+
+  # Zigbee curtain motor (Window Covering cluster).
+  - {id: curtain_1, name: "Curtain", integration: zigbee, addr: "0x00158d0001abcd03", type: cover}
+
+  # RF ceiling fan behind an ESP32 RF bridge (MQTT). level = fan speed 0..100.
+  - {id: fan_1, name: "Ceiling Fan", integration: mqtt, addr: "home/fan_1", type: fan}
+
+  # ESP32 humidity sensor + a smart-plug dehumidifier.
+  - {id: humidity_1,     name: "Humidity",     integration: mqtt, addr: "home/humidity_1",     type: sensor}
+  - {id: dehumidifier_1, name: "Dehumidifier", integration: mqtt, addr: "home/dehumidifier_1", type: switch}
+
+  # Matter blind, natively controlled by the hub over CASE (go-matter).
+  # Commission the device onto the hub's fabric first (e.g. with chip-tool),
+  # then point fabricStore at the stored credentials. Omitting address resolves
+  # the device over mDNS by node id.
   - id: blind_1
-    name: "Blind 1"
+    name: "Blind"
     integration: matter
     type: cover
-    driver: delegated           # later: go-matter
-    triggers:
-      close: blind_close
-      open: blind_open
+    driver: go-matter
+    gomatter:
+      fabricStore: ./matter-data/fabric.json
+      nodeId: 1
+      endpoint: 1
 
-# Automation rules evaluated inside the hub (both devices must be hub-owned).
+  # Alternative: a Matter device delegated to HomeKit (one-way triggers only).
+  # - id: blind_2
+  #   name: "Blind 2"
+  #   integration: matter
+  #   type: cover
+  #   driver: delegated
+  #   triggers: {open: blind2_open, close: blind2_close}
+
+# Automation rules evaluated inside the hub.
 rules:
-  - {type: mirror, src: switch_1, dst: fan_1}
+  # Wall button (decoupled) single press toggles the RF fan.
+  - {type: button, src: button_1, press: single, dst: fan_1, action: toggle}
+  # Double press opens the Matter blind; hold closes it.
+  - {type: button, src: button_1, press: double, dst: blind_1, action: open}
+  - {type: button, src: button_1, press: hold,   dst: blind_1, action: close}
+  # Humidity hysteresis: dehumidifier on at 65%, off at 55%.
+  - {type: threshold, src: humidity_1, dst: dehumidifier_1, above: 65, below: 55}

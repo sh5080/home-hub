@@ -4,6 +4,7 @@ go 1.25.0
 
 require (
 	github.com/brutella/hap v0.0.35
+	github.com/mochi-mqtt/server/v2 v2.7.9
 	github.com/shimmeringbee/persistence v0.0.0-20240615141034-6414db99d48e
 	github.com/shimmeringbee/zigbee v0.0.0-20240614104723-f4c0c0231568
 	github.com/shimmeringbee/zstack v0.0.0-20240714070814-75c3dd0a3d27
@@ -11,7 +12,11 @@ require (
 	gopkg.in/yaml.v3 v3.0.1
 )
 
-require filippo.io/nistec v0.0.4 // indirect
+require (
+	filippo.io/nistec v0.0.4 // indirect
+	github.com/gorilla/websocket v1.5.0 // indirect
+	github.com/rs/xid v1.4.0 // indirect
+)
 
 require (
 	github.com/brutella/dnssd v1.2.14 // indirect

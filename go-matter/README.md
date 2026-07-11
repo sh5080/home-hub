@@ -5,13 +5,14 @@ that commissions and controls Matter devices (a role otherwise only available
 in C++ (`connectedhomeip`), Python (`python-matter-server`), and TypeScript
 (`matter.js`)).
 
-> **Status: operational control works; commissioning is not implemented yet.**
-> The library can resolve, connect to (CASE), and control a device that has
-> already been commissioned to a fabric — read attributes and invoke commands
-> over On/Off, Window Covering, and Level Control. It cannot yet onboard a new
-> device (PASE + the commissioning cluster flow are pending), and it has been
-> validated against spec/RFC test vectors and loopback tests, not yet against
-> physical hardware.
+> **Status: self-contained commissioning + operational control, verified in
+> software.** The library can generate a fabric, commission a factory-fresh
+> device onto it (PASE → CSR → issue NOC → AddNOC → CASE →
+> CommissioningComplete), then resolve, connect, read attributes and invoke
+> commands over On/Off, Window Covering, and Level Control — no chip-tool
+> required. Everything is validated against spec/RFC test vectors and loopback
+> tests; it has NOT yet been validated against physical hardware, and device
+> attestation (DAC chain verification) is not enforced.
 
 ## Scope
 
@@ -31,11 +32,11 @@ in C++ (`connectedhomeip`), Python (`python-matter-server`), and TypeScript
 | `cert` | Matter operational certificates (TLV ↔ X.509 DER) | ✅ |
 | `casesession` | CASE (Sigma1/2/3) session establishment | ✅ |
 | `im` | Interaction Model: Invoke / Read / Subscribe | ✅ |
-| `cluster` | Typed cluster commands and attributes | ✅ (On/Off, Window Covering, Level Control) |
-| `discovery` | mDNS operational discovery + resolve | ✅ (IPv4; IPv6 link-local zones: pending) |
-| `transport` | UDP transport + in-memory pipe for tests | ✅ |
-| `controller` | High-level API: connect, dial, invoke, read | ✅ |
-| `pase`, commissioning | PASE and the commissioning flow | planned |
+| `cluster` | Typed cluster commands + commissioning clusters | ✅ (On/Off, Window Covering, Level Control, GeneralCommissioning, OpCreds) |
+| `discovery` | mDNS operational + commissionable discovery | ✅ (IPv4 + IPv6 link-local zone scoping) |
+| `transport` | UDP transport (with minimal MRP) + in-memory pipe | ✅ |
+| `pase` | PASE handshake + QR / manual pairing-code parsing | ✅ |
+| `controller` | Connect, dial, invoke, read, subscribe, **commission** | ✅ |
 
 ## Quick start
 
@@ -64,8 +65,29 @@ for _, r := range sub.Initial { /* priming values */ }
 go sub.Listen(ctx, func(reports []im.AttributeReport) { /* streamed updates */ })
 ```
 
-Fabric credentials (root cert, controller NOC + key, IPK) are persisted via
-`controller.StoredFabric` (JSON, `0600`).
+Commission a new device onto a fresh fabric (no chip-tool):
+
+```go
+store, _ := controller.GenerateFabric(fabricID, controllerNodeID)
+payload, _ := pase.ParseOnboarding("MT:...")   // QR or manual pairing code
+// transport t reaches the device (commissionable mDNS gives its address)
+controller.Commission(ctx, t, payload.Passcode, store, newNodeID, adminVendorID)
+// then CASE to the device and finish:
+sess, _ := controller.New(fabric, store.Identity()).Dial(ctx, newNodeID)
+controller.CompleteCommissioning(ctx, sess)
+```
+
+Fabric credentials (root cert + CA key, controller NOC + key, IPK) are
+persisted via `controller.StoredFabric` (JSON, `0600`).
+
+## Not yet done
+
+- Device attestation: the DAC/PAI chain is not verified, so an untrusted
+  device could impersonate one. Acceptable for commissioning your own devices
+  on a private LAN; add CSA-root-store verification before trusting unknown
+  hardware.
+- Thread/BLE commissioning transports (IP/on-network only).
+- Validation against physical hardware.
 
 ## Design principles
 

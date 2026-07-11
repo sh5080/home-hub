@@ -5,6 +5,7 @@ package homekit
 import (
 	"context"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/brutella/hap"
@@ -21,6 +22,10 @@ type Config struct {
 	Pin     string
 	Addr    string // e.g. ":51826"
 	Storage string
+	// Exclude lists device IDs NOT to publish as accessories — devices HomeKit
+	// already owns directly (delegated Matter devices), which would otherwise
+	// appear twice. Natively-controlled devices are published normally.
+	Exclude []string
 }
 
 // Bridge publishes hub devices to HomeKit and forwards HomeKit-originated
@@ -32,6 +37,7 @@ type Bridge struct {
 	reg *registry.Registry
 	log *slog.Logger
 
+	mu       sync.RWMutex // guards devs (built in Start, read by OnEvent)
 	devs     map[string]devAccessory
 	triggers map[string]*accessory.Switch
 }
@@ -65,13 +71,20 @@ func (br *Bridge) RegisterTrigger(id string) func() {
 func (br *Bridge) Start(ctx context.Context) error {
 	bridge := accessory.NewBridge(accessory.Info{Name: br.cfg.Name, Manufacturer: "home-hub"})
 
+	excluded := make(map[string]bool, len(br.cfg.Exclude))
+	for _, id := range br.cfg.Exclude {
+		excluded[id] = true
+	}
+
 	var as []*accessory.A
 	for _, d := range br.reg.List() {
-		if d.Integration == domain.Matter {
-			continue // delegated to HomeKit; only triggers are exposed
+		if excluded[d.ID] {
+			continue // HomeKit owns this device directly; only triggers are exposed
 		}
 		da := br.buildAccessory(d, br.bus.PublishCommand)
+		br.mu.Lock()
 		br.devs[d.ID] = da
+		br.mu.Unlock()
 		as = append(as, da.a)
 		br.log.Info("publish accessory", "id", d.ID, "type", d.Type)
 	}
@@ -94,7 +107,12 @@ func (br *Bridge) Start(ctx context.Context) error {
 // OnEvent reflects a device state change onto its HAP characteristics so the
 // change is pushed to HomeKit controllers.
 func (br *Bridge) OnEvent(e domain.Event) {
+	if e.Kind != domain.EventStateChanged {
+		return // button presses etc. have no characteristic to reflect
+	}
+	br.mu.RLock()
 	da, ok := br.devs[e.DeviceID]
+	br.mu.RUnlock()
 	if !ok {
 		return
 	}

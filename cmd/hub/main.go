@@ -30,7 +30,9 @@ type runnable interface {
 	Start(ctx context.Context) error
 }
 
-// applyMatter maps a domain command onto a Matter driver.
+// applyMatter maps a domain command onto a Matter driver. All values are in
+// domain orientation (position 0 = closed, 100 = open); the driver translates
+// to Matter's inverted lift percent internally.
 func applyMatter(d matter.Driver, c domain.Command) error {
 	switch c.Action {
 	case domain.ActionSetOn:
@@ -50,6 +52,16 @@ func applyMatter(d matter.Driver, c domain.Command) error {
 		}
 	default:
 		return nil
+	}
+}
+
+// gmConfig converts a device's config block into a matter.GoMatterConfig.
+func gmConfig(dc config.DeviceConfig) matter.GoMatterConfig {
+	return matter.GoMatterConfig{
+		FabricStore: dc.GoMatter.FabricStore,
+		NodeID:      dc.GoMatter.NodeID,
+		Address:     dc.GoMatter.Address,
+		Endpoint:    dc.GoMatter.Endpoint,
 	}
 }
 
@@ -73,52 +85,49 @@ func main() {
 	}
 	log.Info("registry loaded", "devices", len(reg.List()))
 
+	// Delegated Matter devices are owned by HomeKit directly: exclude them from
+	// the HAP bridge (they would appear twice) and expose only their triggers.
+	// Natively-controlled (go-matter) devices are published like any other.
+	var delegated []string
+	for _, dc := range cfg.Devices {
+		if dc.Integration == domain.Matter && dc.Driver != "go-matter" {
+			delegated = append(delegated, dc.ID)
+		}
+	}
+
 	// Protocol adapters.
-	zb := zigbee.New(cfg.Zigbee.Port, b, reg, log)
+	zb := zigbee.New(zigbee.Config{
+		Port:       cfg.Zigbee.Port,
+		Storage:    cfg.Zigbee.Storage,
+		PermitJoin: cfg.Zigbee.PermitJoin,
+	}, b, reg, log)
 	mq := mqtt.New(cfg.MQTT.Listen, b, log)
 	hk := homekit.New(homekit.Config{
 		Name:    cfg.HomeKit.Name,
 		Pin:     cfg.HomeKit.Pin,
 		Addr:    ":" + cfg.HomeKit.Port,
 		Storage: cfg.HomeKit.Storage,
+		Exclude: delegated,
 	}, b, reg, log)
 
-	// Matter devices are either controlled natively by the hub (driver:
-	// go-matter, over a CASE session) or delegated to HomeKit via virtual
-	// trigger switches. Both are tracked in a registry so automations/HomeKit
-	// can target them uniformly.
+	// Matter devices: natively controlled through a reconnecting go-matter
+	// driver (dials lazily, re-dials when the device drops), or delegated to
+	// HomeKit via virtual trigger switches.
 	matterReg := matter.NewRegistry()
-	var gmDrivers []*matter.GoMatterDriver
-	var gmConfigs = map[string]matter.GoMatterConfig{} // native devices, for subscription
+	var matterDrivers []*matter.ReconnectingDriver
+	var gmConfigs = map[string]matter.GoMatterConfig{} // native devices, for subscriptions
 	for _, dc := range cfg.Devices {
 		if dc.Integration != domain.Matter {
 			continue
 		}
-		if dc.Driver == "go-matter" && dc.GoMatter != nil {
-			// Bound the commissioning-time dial so a missing device cannot stall startup.
-			dialCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-			gm, err := matter.DialGoMatter(dialCtx, matter.GoMatterConfig{
-				FabricStore: dc.GoMatter.FabricStore,
-				NodeID:      dc.GoMatter.NodeID,
-				Address:     dc.GoMatter.Address,
-				Endpoint:    dc.GoMatter.Endpoint,
-			})
-			cancel()
-			if err == nil {
-				matterReg.Set(dc.ID, gm)
-				gmDrivers = append(gmDrivers, gm)
-				gmConfigs[dc.ID] = matter.GoMatterConfig{
-					FabricStore: dc.GoMatter.FabricStore,
-					NodeID:      dc.GoMatter.NodeID,
-					Address:     dc.GoMatter.Address,
-					Endpoint:    dc.GoMatter.Endpoint,
-				}
-				log.Info("matter device natively controlled", "id", dc.ID, "addr", dc.GoMatter.Address)
-				continue
-			}
-			// Fall back to delegation so a single unreachable device does not take
-			// the hub down; it can still be driven through HomeKit triggers.
-			log.Error("go-matter dial failed; falling back to delegated", "id", dc.ID, "err", err)
+		if dc.Driver == "go-matter" {
+			gmc := gmConfig(dc)
+			rd := matter.NewReconnecting(gmc, log)
+			matterReg.Set(dc.ID, rd)
+			matterDrivers = append(matterDrivers, rd)
+			gmConfigs[dc.ID] = gmc
+			log.Info("matter device natively controlled", "id", dc.ID, "node", gmc.NodeID)
+			continue
 		}
 		pressOpen := hk.RegisterTrigger(dc.Triggers["open"])
 		pressClose := hk.RegisterTrigger(dc.Triggers["close"])
@@ -142,38 +151,29 @@ func main() {
 
 	auto := automation.New(b, log)
 	for _, r := range cfg.Rules {
-		if r.Type == "mirror" {
+		switch r.Type {
+		case "mirror":
 			auto.Add(automation.MirrorRule(r.Src, r.Dst))
+		case "button":
+			auto.Add(automation.ButtonRule(r.Src, r.Press, r.Dst, r.Action, r.Value, reg.State))
+		case "threshold":
+			auto.Add(automation.ThresholdRule(r.Src, r.Dst, *r.Above, *r.Below))
 		}
 	}
 	log.Info("automation rules loaded", "count", len(cfg.Rules))
 	hz := health.New(*healthAddr, log)
 
-	// Poll native Matter devices so external state changes reach HomeKit.
+	// Poll native Matter devices so external state changes reach HomeKit even
+	// when the device rejects subscriptions.
 	matterPoller := matter.NewPoller(matterReg, b.PublishEvent, 30*time.Second, log)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	// Subscribe to native devices for push state updates on a dedicated session.
-	// Best-effort: if a device does not support subscribe, the poller still
-	// reflects its state.
-	var watchSessions []*matter.GoMatterDriver // reuse Shutdown() to close sessions
+	// Watch native devices for push state updates on dedicated sessions. Each
+	// watcher re-subscribes with backoff when its stream drops.
 	for id, gmc := range gmConfigs {
-		subCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-		sess, sub, err := matter.SubscribeGoMatter(subCtx, gmc)
-		cancel()
-		if err != nil {
-			log.Warn("matter subscription unavailable; relying on poller", "id", id, "err", err)
-			continue
-		}
-		watchSessions = append(watchSessions, matter.NewGoMatterDriver(sess, gmc.Endpoint))
-		go func(id string) {
-			if err := matter.PublishReports(ctx, sub.Initial, sub.Listen, id, b.PublishEvent, log); err != nil && ctx.Err() == nil {
-				log.Error("matter subscription ended", "id", id, "err", err)
-			}
-		}(id)
-		log.Info("matter device subscribed", "id", id)
+		go matter.WatchGoMatter(ctx, gmc, id, b.PublishEvent, log)
 	}
 
 	// Dispatch bus commands to the owning adapter.
@@ -200,7 +200,8 @@ func main() {
 		}
 	}()
 
-	// Reflect device events into HomeKit.
+	// Reflect device events into the state cache, HomeKit, and (via the
+	// automation engine's own subscription) the rules.
 	go func() {
 		events := b.SubscribeEvents()
 		for {
@@ -227,8 +228,8 @@ func main() {
 	}
 	log.Info("home hub started")
 	wg.Wait()
-	for _, gm := range append(gmDrivers, watchSessions...) {
-		if err := gm.Shutdown(); err != nil {
+	for _, md := range matterDrivers {
+		if err := md.Shutdown(); err != nil {
 			log.Error("close matter session", "err", err)
 		}
 	}

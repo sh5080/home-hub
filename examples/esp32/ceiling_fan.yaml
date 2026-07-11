@@ -1,0 +1,113 @@
+# ESPHome: RF ceiling-fan + light bridge for the home-hub MQTT convention.
+#
+# Device id in configs/devices.yaml: fan_1  (integration: mqtt, addr: home/fan_1)
+# Subscribes home/fan_1/set, publishes home/fan_1/state.
+#
+# The ESP32 owns the RF codes; the hub only sends intent {"on":..,"level":..}.
+# Replace the remote_transmitter codes with ones captured from your remote.
+
+esphome:
+  name: ceiling-fan-bridge
+
+esp32:
+  board: esp32dev
+
+logger:
+
+# Point this at the hub's embedded broker (mqtt.listen in the hub config).
+mqtt:
+  broker: 192.168.1.10
+  port: 1883
+  # No HA discovery: the hub is the broker and speaks its own topic convention.
+  discovery: false
+  topic_prefix: null
+  on_json_message:
+    # home/fan_1/set → drive the fan
+    - topic: home/fan_1/set
+      then:
+        - lambda: |-
+            if (x.containsKey("on")) {
+              if (x["on"]) { id(fan_light).turn_on(); }
+              else { id(fan_light).turn_off(); }
+            }
+            if (x.containsKey("level")) {
+              int lvl = x["level"];
+              // Map 0..100 to the fan's discrete speeds and fire the matching RF code.
+              if (lvl <= 0)       id(rf_fan_off).press();
+              else if (lvl < 34)  id(rf_fan_low).press();
+              else if (lvl < 67)  id(rf_fan_med).press();
+              else                id(rf_fan_high).press();
+              id(fan_level) = lvl;
+              id(publish_state).execute();
+            }
+
+globals:
+  - id: fan_level
+    type: int
+    restore_value: false
+    initial_value: '0'
+
+remote_transmitter:
+  pin: GPIO4
+  carrier_duty_percent: 100%
+
+# Placeholder RF codes — replace with codes captured from your remote.
+button:
+  - platform: template
+    id: rf_fan_off
+    on_press:
+      - remote_transmitter.transmit_rc_switch_raw:
+          code: "000000000000000000000001"
+          protocol: 1
+  - platform: template
+    id: rf_fan_low
+    on_press:
+      - remote_transmitter.transmit_rc_switch_raw:
+          code: "000000000000000000000010"
+          protocol: 1
+  - platform: template
+    id: rf_fan_med
+    on_press:
+      - remote_transmitter.transmit_rc_switch_raw:
+          code: "000000000000000000000011"
+          protocol: 1
+  - platform: template
+    id: rf_fan_high
+    on_press:
+      - remote_transmitter.transmit_rc_switch_raw:
+          code: "000000000000000000000100"
+          protocol: 1
+
+# The integrated light, via a second RF code (or a relay if it is wired).
+light:
+  - platform: binary
+    id: fan_light
+    name: "Ceiling Fan Light"
+    output: light_output
+    on_turn_on:
+      - lambda: id(publish_state).execute();
+    on_turn_off:
+      - lambda: id(publish_state).execute();
+
+output:
+  - platform: template
+    id: light_output
+    type: binary
+    write_action:
+      - if:
+          condition:
+            lambda: 'return state;'
+          then:
+            - remote_transmitter.transmit_rc_switch_raw: {code: "000000000000000000001000", protocol: 1}
+          else:
+            - remote_transmitter.transmit_rc_switch_raw: {code: "000000000000000000001001", protocol: 1}
+
+# Publish current state back to the hub as home/fan_1/state.
+script:
+  - id: publish_state
+    then:
+      - mqtt.publish_json:
+          topic: home/fan_1/state
+          payload: |-
+            root["on"] = id(fan_light).current_values.is_on();
+            root["level"] = id(fan_level);

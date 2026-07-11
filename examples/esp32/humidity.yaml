@@ -1,0 +1,43 @@
+# ESPHome: temperature + humidity sensor for the home-hub MQTT convention.
+#
+# Device id in configs/devices.yaml: humidity_1 (integration: mqtt, addr: home/humidity_1, type: sensor)
+# Publishes home/humidity_1/state as {"value": <humidity %>}.
+#
+# Pair with a threshold automation rule in the hub, e.g.:
+#   - {type: threshold, src: humidity_1, dst: dehumidifier_1, above: 65, below: 55}
+
+esphome:
+  name: humidity-sensor
+
+esp32:
+  board: esp32dev
+
+logger:
+
+mqtt:
+  broker: 192.168.1.10
+  port: 1883
+  discovery: false
+  topic_prefix: null
+
+sensor:
+  - platform: dht
+    pin: GPIO15
+    model: DHT22
+    temperature:
+      name: "Room Temperature"
+      id: room_temp
+    humidity:
+      name: "Room Humidity"
+      id: room_humidity
+      # The hub's sensor State carries a single "value"; report humidity there,
+      # since the threshold rule (dehumidifier) keys off humidity.
+      on_value:
+        - mqtt.publish_json:
+            topic: home/humidity_1/state
+            payload: |-
+              root["value"] = x;
+    update_interval: 30s
+
+# If you also want temperature-driven automations, publish a second logical
+# device (e.g. home/temp_1/state with {"value": <°C>}) and add it to the config.

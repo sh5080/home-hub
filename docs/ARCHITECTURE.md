@@ -125,23 +125,34 @@ HomeKit "on" → [HAP] OnValueRemoteUpdate
 ```yaml
 zigbee:
   port: /dev/ttyUSB0          # Zigbee coordinator (CC2652 계열)
+  storage: ./zigbee-data      # 네트워크·페어링 영속화 (없으면 재시작마다 재페어링)
+  permitJoin: false           # 페어링할 때만 true
 
 mqtt:
-  listen: ":1883"             # 내장 브로커
+  listen: ":1883"             # 내장 브로커; home/<id>/state ↔ home/<id>/set
 
 devices:
-  - {id: switch_1, integration: zigbee, addr: "0x00158d0001abcd01", type: switch}
-  - {id: fan_1,    integration: mqtt,   addr: "home/room/fan",      type: fan}
-  - {id: cover_1,  integration: mqtt,   addr: "home/room/curtain",  type: cover}
+  # 멀티갱 스위치: 같은 addr + endpoint 로 갱 구분
+  - {id: light_1,  integration: zigbee, addr: "0x00158d0001abcd01", type: light, endpoint: 1}
+  - {id: light_2,  integration: zigbee, addr: "0x00158d0001abcd01", type: light, endpoint: 2}
+  - {id: switch_1, integration: zigbee, addr: "0x00158d0001abcd02", type: switch} # decoupled 버튼
+  - {id: fan_1,    integration: mqtt,   addr: "home/fan_1",         type: fan}    # level = 팬 속도
 
-  # Matter 기기: 현재 HomeKit 위임. 가상 트리거 스위치만 노출.
+  # Matter 기기: go-matter 네이티브 (권장) 또는 HomeKit 위임
   - id: blind_1
     integration: matter
-    driver: delegated           # 나중에 → go-matter
-    triggers:                   # HAP 가상 스위치 ↔ HomeKit 자동화 (1회 수동 생성)
-      close: blind_close
-      open:  blind_open
+    type: cover
+    driver: go-matter
+    gomatter: {fabricStore: ./matter-data/fabric.json, nodeId: 1, endpoint: 1}
+
+rules:
+  # 벽 버튼(decoupled) → 다른 기기 (toggle|on|off|open|close|position)
+  - {type: button, src: switch_1, press: single, dst: fan_1, action: toggle}
+  - {type: button, src: switch_1, press: double, dst: blind_1, action: open}
+  # 센서 임계값 히스테리시스는 threshold 규칙 (예: 습도→제습기, above/below)
 ```
+
+전체 예시는 `configs/devices.yaml` 참고 (예시 config는 config 테스트가 항상 검증한다).
 
 ## 8. Matter 이음새 (seam)
 
@@ -187,14 +198,14 @@ type Driver interface {
 | M3 | 보안 메시지 레이어 (AES-CCM AEAD) | ✅ (MRP 재전송은 단순화) |
 | M4 | TLV + Interaction Model **Invoke/Read** (OnOff·WindowCovering·LevelControl) | ✅ |
 | M5 | 속성 **Subscribe** → 푸시 상태 | ✅ (setup + 스트리밍) |
-| M6 | 자체 커미셔닝 (PASE/SPAKE2+ + DAC 검증) | ⬜ (SPAKE2+ 프리미티브만 완료) |
+| M6 | 자체 커미셔닝 (PASE → CSR → NOC 발급 → AddNOC → CASE → Complete) | ✅ 코드 완료 (DAC 검증·실HW 제외) |
 
 **크립토 주의**
 - **AES-CCM**은 Go 표준 라이브러리에 없음 → 외부 라이브러리 또는 직접 구현.
 - **SPAKE2+** 표준 라이브러리 없음 → 스펙 기반 직접 구현(M6).
 - Matter 인증서는 **compact-TLV** 포맷(≠ 평문 X.509 DER) → 자체 인코딩 필요.
 
-**시퀀싱** — operational 제어(M1~M5)를 먼저 완료했고, 자체 커미셔닝(M6)은 뒤로 둔다. 현재는 chip-tool로 커미셔닝한 기기를 `go-matter`가 resolve→CASE→Invoke/Read/Subscribe 한다. 하드웨어 실검증(실제 blind)은 남아 있다.
+**시퀀싱** — operational 제어(M1~M5) + 자체 커미셔닝(M6)까지 코드 완료. `go-matter`는 fabric 생성 → PASE로 공장초기 기기 온보딩 → NOC 발급/AddNOC → CASE → CommissioningComplete → resolve/Invoke/Read/Subscribe 전 경로를 자체 수행한다(chip-tool 불필요). 남은 것: DAC(기기 인증서 체인) 검증, Thread/BLE 커미셔닝 전송, 실제 하드웨어 검증.
 
 ## 10. 배포
 

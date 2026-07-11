@@ -90,6 +90,75 @@ func TestLoadMissingFile(t *testing.T) {
 	}
 }
 
+// TestLoadExampleConfig guards the repo's example config: it must always
+// parse and validate, since it doubles as the schema documentation.
+func TestLoadExampleConfig(t *testing.T) {
+	c, err := Load(filepath.Join("..", "..", "configs", "devices.yaml"))
+	if err != nil {
+		t.Fatalf("example config invalid: %v", err)
+	}
+	if len(c.Devices) == 0 || len(c.Rules) == 0 {
+		t.Fatalf("example config unexpectedly empty: %d devices, %d rules", len(c.Devices), len(c.Rules))
+	}
+	if c.Zigbee.Storage == "" {
+		t.Fatal("example config must demonstrate zigbee storage")
+	}
+}
+
+func TestValidateButtonRule(t *testing.T) {
+	base := func(r RuleConfig) *Config {
+		return &Config{
+			Devices: []DeviceConfig{
+				{Device: domain.Device{ID: "sw"}},
+				{Device: domain.Device{ID: "fan"}},
+			},
+			Rules: []RuleConfig{r},
+		}
+	}
+	ok := base(RuleConfig{Type: "button", Src: "sw", Dst: "fan", Press: "single", Action: "toggle"})
+	if err := ok.validate(); err != nil {
+		t.Fatalf("valid button rule rejected: %v", err)
+	}
+	if err := base(RuleConfig{Type: "button", Src: "sw", Dst: "fan", Press: "triple", Action: "toggle"}).validate(); err == nil {
+		t.Fatal("bad press must be rejected")
+	}
+	if err := base(RuleConfig{Type: "button", Src: "sw", Dst: "fan", Press: "single", Action: "explode"}).validate(); err == nil {
+		t.Fatal("bad action must be rejected")
+	}
+	if err := base(RuleConfig{Type: "button", Src: "sw", Dst: "fan", Press: "single", Action: "position", Value: 150}).validate(); err == nil {
+		t.Fatal("out-of-range position must be rejected")
+	}
+}
+
+func TestValidateThresholdRule(t *testing.T) {
+	above, below := 65.0, 55.0
+	c := &Config{
+		Devices: []DeviceConfig{
+			{Device: domain.Device{ID: "hum"}},
+			{Device: domain.Device{ID: "dehum"}},
+		},
+		Rules: []RuleConfig{{Type: "threshold", Src: "hum", Dst: "dehum", Above: &above, Below: &below}},
+	}
+	if err := c.validate(); err != nil {
+		t.Fatalf("valid threshold rule rejected: %v", err)
+	}
+	bad := 50.0
+	c.Rules[0].Above = &bad // above <= below: no hysteresis band
+	if err := c.validate(); err == nil {
+		t.Fatal("inverted threshold band must be rejected")
+	}
+}
+
+func TestValidateDelegatedNeedsTriggers(t *testing.T) {
+	c := &Config{Devices: []DeviceConfig{{
+		Device: domain.Device{ID: "b1", Integration: domain.Matter},
+		Driver: "delegated",
+	}}}
+	if err := c.validate(); err == nil {
+		t.Fatal("delegated matter device without triggers must be rejected")
+	}
+}
+
 func TestLoadRules(t *testing.T) {
 	c, err := Load(filepath.Join("testdata", "devices.yaml"))
 	if err != nil {
