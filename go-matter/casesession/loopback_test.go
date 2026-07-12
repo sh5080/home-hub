@@ -19,7 +19,7 @@ const (
 )
 
 func u16p(v uint16) *uint16 { return &v }
-func u8p(v uint8) *uint8     { return &v }
+func u8p(v uint8) *uint8    { return &v }
 
 func genKey(t *testing.T) (scalar, pub []byte) {
 	t.Helper()

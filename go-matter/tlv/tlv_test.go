@@ -66,7 +66,7 @@ func TestMinimalIntegerWidths(t *testing.T) {
 		{func(w *Writer) { w.PutUint(Anonymous(), 1<<32) }, "070000000001000000"},
 		{func(w *Writer) { w.PutInt(Anonymous(), -128) }, "0080"},
 		{func(w *Writer) { w.PutInt(Anonymous(), -129) }, "017fff"},
-		{func(w *Writer) { w.PutInt(Anonymous(), 1 << 40) }, "030000000000010000"},
+		{func(w *Writer) { w.PutInt(Anonymous(), 1<<40) }, "030000000000010000"},
 	}
 	for _, tc := range cases {
 		w := NewWriter()

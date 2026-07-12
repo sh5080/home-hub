@@ -17,8 +17,10 @@ import (
 // operational identity. It establishes CASE sessions with devices and exposes
 // the Interaction Model over them.
 type Controller struct {
-	fabric       casesession.Fabric
-	self         casesession.Identity
+	fabric casesession.Fabric
+	self   casesession.Identity
+
+	mu           sync.Mutex // guards the session/exchange id counters
 	nextSession  uint16
 	nextExchange uint16
 }
@@ -28,13 +30,21 @@ func New(fabric casesession.Fabric, self casesession.Identity) *Controller {
 	return &Controller{fabric: fabric, self: self, nextSession: 1, nextExchange: 1}
 }
 
+// nextIDs hands out a fresh (session, exchange) id pair, safe for concurrent
+// Connect/Dial/Commission calls.
+func (c *Controller) nextIDs() (session, exchange uint16) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	session, exchange = c.nextSession, c.nextExchange
+	c.nextSession++
+	c.nextExchange++
+	return
+}
+
 // Connect performs a CASE handshake with peerNodeID over t and returns the
 // resulting secure Session.
 func (c *Controller) Connect(ctx context.Context, t transport.Transport, peerNodeID uint64) (*Session, error) {
-	localSessionID := c.nextSession
-	c.nextSession++
-	exchangeID := c.nextExchange
-	c.nextExchange++
+	localSessionID, exchangeID := c.nextIDs()
 
 	in, err := casesession.NewInitiator(c.fabric, c.self, peerNodeID, localSessionID)
 	if err != nil {
@@ -101,7 +111,17 @@ func (c *Controller) Connect(ctx context.Context, t transport.Transport, peerNod
 // skips standalone acks.
 func awaitSC(ctx context.Context, t transport.Transport, resend []byte, seen map[uint32]bool) (message.Header, message.ProtoHeader, []byte, error) {
 	retransmits := 0
-	for {
+	for iters := 0; ; iters++ {
+		// Bound the loop and honor ctx so an injected flood of unparseable or
+		// already-seen unsecured frames during the handshake cannot spin here
+		// forever (or grow `seen` without limit).
+		if err := ctx.Err(); err != nil {
+			return message.Header{}, message.ProtoHeader{}, nil, err
+		}
+		if iters > maxExchangeMessages {
+			return message.Header{}, message.ProtoHeader{}, nil,
+				errors.New("controller: too many handshake messages without progress")
+		}
 		actx, cancel := context.WithTimeout(ctx, mrpInterval(retransmits))
 		frame, err := t.Receive(actx)
 		cancel()

@@ -44,8 +44,8 @@ type Header struct {
 	SourceNodeID  uint64 // valid when SourcePresent
 	SourcePresent bool
 
-	DestNodeID  uint64   // valid when DestKind == DestNode
-	DestGroupID uint16   // valid when DestKind == DestGroup
+	DestNodeID  uint64 // valid when DestKind == DestNode
+	DestGroupID uint16 // valid when DestKind == DestGroup
 	DestKind    DestKind
 }
 

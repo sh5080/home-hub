@@ -26,6 +26,12 @@ const (
 	mrpInitialInterval = 400 * time.Millisecond
 	mrpBackoffBase     = 2 // interval doubles per retransmission
 	mrpIntervalCeiling = 3200 * time.Millisecond
+
+	// maxExchangeMessages bounds how many non-reply messages (duplicates,
+	// standalone acks, foreign-exchange frames) a single reliable exchange will
+	// tolerate before giving up — an anti-flood/anti-reflection cap. Legitimate
+	// exchanges need only a few iterations.
+	maxExchangeMessages = 64
 )
 
 // mrpInterval returns the wait-before-retransmit for the given retransmission
@@ -97,7 +103,20 @@ func isStandaloneAck(ph message.ProtoHeader) bool {
 // receive half of a reliable request/response exchange.
 func (s *Session) exchangeRT(ctx context.Context, sentFrame []byte, exchangeID uint16) (secureMsg, error) {
 	retransmits := 0
-	for {
+	for iters := 0; ; iters++ {
+		// Honor the caller's context on every iteration and bound the number of
+		// non-reply messages we will process. Without this, a chatty or hostile
+		// peer that keeps the socket fed (duplicates, standalone acks, or frames
+		// for other exchanges) would loop forever — reflecting a frame per
+		// injected packet and defeating the caller's timeout. A legitimate
+		// exchange resolves in a handful of iterations.
+		if err := ctx.Err(); err != nil {
+			return secureMsg{}, err
+		}
+		if iters > maxExchangeMessages {
+			return secureMsg{}, errors.New("controller: too many messages without a matching reply")
+		}
+
 		actx, cancel := context.WithTimeout(ctx, mrpInterval(retransmits))
 		m, err := s.recvMsg(actx)
 		cancel()

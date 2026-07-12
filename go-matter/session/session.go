@@ -7,6 +7,7 @@ package session
 import (
 	"crypto/cipher"
 	"encoding/binary"
+	"errors"
 	"fmt"
 
 	"github.com/sh5080/go-matter/crypto"
@@ -57,9 +58,19 @@ func NewSecure(localID, peerID uint16, localNode, peerNode uint64, sendKey, recv
 	}, nil
 }
 
+// ErrCounterExhausted is returned when a session's transmit counter would wrap.
+// The AES-CCM nonce embeds this counter, so reuse after a wrap would repeat a
+// (key, nonce) pair — catastrophic for CCM. Matter requires re-establishing the
+// session before this happens; the library refuses to encrypt rather than
+// silently reuse a nonce.
+var ErrCounterExhausted = errors.New("session: transmit counter exhausted; re-establish the session")
+
 // Encrypt seals a protocol payload into a complete wire message, stamping and
 // advancing the transmit counter.
 func (s *Secure) Encrypt(payload []byte) ([]byte, error) {
+	if s.txCounter == ^uint32(0) {
+		return nil, ErrCounterExhausted
+	}
 	counter := s.txCounter
 	s.txCounter++
 

@@ -54,9 +54,9 @@ const (
 
 // Attr is one distinguished-name attribute.
 type Attr struct {
-	Tag       uint8  // base attribute tag (printable flag stripped)
-	IsString  bool   // true: String is set; false: Value is set
-	Printable bool   // PrintableString (vs UTF8String) for string attributes
+	Tag       uint8 // base attribute tag (printable flag stripped)
+	IsString  bool  // true: String is set; false: Value is set
+	Printable bool  // PrintableString (vs UTF8String) for string attributes
 	String    string
 	Value     uint64
 }

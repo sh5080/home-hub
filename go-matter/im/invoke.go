@@ -76,20 +76,31 @@ func decodePath(r *tlv.Reader) (CommandPath, error) {
 		return p, err
 	}
 	for r.Next() {
+		// Read a uint only for the members that are uints; skip anything else so
+		// an unexpected/optional field cannot abort the whole decode.
+		var dst *uint32
+		var ep *uint16
+		switch r.Tag().Num {
+		case 0:
+			ep = &p.Endpoint
+		case 1:
+			dst = &p.Cluster
+		case 2:
+			dst = &p.Command
+		default:
+			continue
+		}
 		v, err := r.Uint()
 		if err != nil {
 			return p, err
 		}
-		switch r.Tag().Num {
-		case 0:
-			p.Endpoint = uint16(v)
-		case 1:
-			p.Cluster = uint32(v)
-		case 2:
-			p.Command = uint32(v)
+		if ep != nil {
+			*ep = uint16(v)
+		} else {
+			*dst = uint32(v)
 		}
 	}
-	return p, nil
+	return p, r.Err()
 }
 
 // transcodeFlatStruct re-encodes the (flat) structure the reader is positioned

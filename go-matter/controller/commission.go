@@ -100,7 +100,11 @@ func Commission(ctx context.Context, t transport.Transport, passcode uint32, sto
 		return fmt.Errorf("controller: AddTrustedRootCertificate rejected: 0x%02x", res.Status.Status)
 	}
 
-	addNOC, err := cluster.AddNOC(noc, store.IPK, controllerNodeID(store), adminVendorID)
+	adminSubject, err := controllerNodeID(store)
+	if err != nil {
+		return fmt.Errorf("controller: read controller node id: %w", err)
+	}
+	addNOC, err := cluster.AddNOC(noc, store.IPK, adminSubject, adminVendorID)
 	if err != nil {
 		return err
 	}
@@ -145,14 +149,19 @@ func CompleteCommissioning(ctx context.Context, sess *Session) error {
 }
 
 // controllerNodeID reads the controller's node id from its NOC (the AddNOC
-// caseAdminSubject: who may administer the device over CASE).
-func controllerNodeID(store StoredFabric) uint64 {
+// caseAdminSubject: who may administer the device over CASE). A zero/degenerate
+// admin subject would leave the device with a broken ACL, so decode failures
+// are surfaced rather than swallowed.
+func controllerNodeID(store StoredFabric) (uint64, error) {
 	noc, err := cert.Decode(store.ControllerNOC)
 	if err != nil {
-		return 0
+		return 0, fmt.Errorf("decode controller NOC: %w", err)
 	}
-	id, _ := noc.Subject.NodeID()
-	return id
+	id, ok := noc.Subject.NodeID()
+	if !ok || id == 0 {
+		return 0, fmt.Errorf("controller NOC has no node id")
+	}
+	return id, nil
 }
 
 // paseHandshake runs PASE over t with MRP (retransmission + acks), returning

@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"sync"
@@ -15,6 +16,67 @@ import (
 	"github.com/sh5080/go-matter/tlv"
 	"github.com/sh5080/go-matter/transport"
 )
+
+// floodTransport hands back an endless stream of authenticating standalone-ack
+// frames, simulating a peer that keeps the socket fed so the read never times
+// out. exchangeRT must still terminate (bounded) instead of looping forever.
+type floodTransport struct {
+	peer   *session.Secure // encrypts frames the session-under-test will accept
+	closed bool
+}
+
+func (f *floodTransport) Send([]byte) error { return nil }
+func (f *floodTransport) Close() error      { f.closed = true; return nil }
+func (f *floodTransport) Receive(ctx context.Context) ([]byte, error) {
+	if f.closed || ctx.Err() != nil {
+		return nil, context.Canceled
+	}
+	ack := message.ProtoHeader{
+		Opcode: message.SCStandaloneAck, ExchangeID: 0x9999,
+		ProtocolID: message.ProtocolSecureChannel,
+	}
+	frame, err := f.peer.Encrypt(ack.Encode())
+	if err != nil {
+		return nil, err
+	}
+	return frame, nil
+}
+
+// TestExchangeRTBoundedUnderFlood proves the anti-flood cap: a peer that never
+// stops sending non-reply frames makes exchangeRT return an error rather than
+// spin forever or reflect unboundedly.
+func TestExchangeRTBoundedUnderFlood(t *testing.T) {
+	sendKey := bytes.Repeat([]byte{0x11}, 16)
+	recvKey := bytes.Repeat([]byte{0x22}, 16)
+	// The session under test (local id 1) receives with recvKey; the peer sends
+	// with the same key so its frames authenticate.
+	ours, err := session.NewSecure(1, 2, 0, 0, sendKey, recvKey, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	peer, err := session.NewSecure(2, 1, 0, 0, recvKey, sendKey, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sess := &Session{secure: ours, t: &floodTransport{peer: peer}, exchange: 1}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, e := sess.exchangeRT(ctx, []byte("sent"), 1)
+		done <- e
+	}()
+	select {
+	case e := <-done:
+		if e == nil {
+			t.Fatal("expected an error under an endless flood")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("exchangeRT did not terminate under flood (unbounded loop)")
+	}
+}
 
 func TestMRPInterval(t *testing.T) {
 	if mrpInterval(0) != mrpInitialInterval {

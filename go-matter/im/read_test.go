@@ -8,8 +8,8 @@ import (
 
 func TestReadRequestRoundTrip(t *testing.T) {
 	paths := []AttributePath{
-		{Endpoint: 1, Cluster: 0x0006, Attribute: 0x0000},   // OnOff
-		{Endpoint: 2, Cluster: 0x0102, Attribute: 0x000E},   // CurrentPositionLiftPercent100ths
+		{Endpoint: 1, Cluster: 0x0006, Attribute: 0x0000}, // OnOff
+		{Endpoint: 2, Cluster: 0x0102, Attribute: 0x000E}, // CurrentPositionLiftPercent100ths
 	}
 	b, err := EncodeReadRequest(paths, true)
 	if err != nil {
@@ -24,6 +24,35 @@ func TestReadRequestRoundTrip(t *testing.T) {
 	}
 	if len(got) != 2 || got[0] != paths[0] || got[1] != paths[1] {
 		t.Fatalf("paths = %+v", got)
+	}
+}
+
+// TestDecodeAttrPathToleratesExtraMembers checks that spec-legal, non-uint
+// AttributePathIB members a real device may include (EnableTagCompression bool
+// at tag 0, ListIndex null at tag 5) do not abort decoding of the path.
+func TestDecodeAttrPathToleratesExtraMembers(t *testing.T) {
+	w := tlv.NewWriter()
+	w.StartList(tlv.Anonymous())
+	w.PutBool(tlv.Context(0), false)  // EnableTagCompression
+	w.PutUint(tlv.Context(2), 3)      // Endpoint
+	w.PutUint(tlv.Context(3), 0x0102) // Cluster
+	w.PutUint(tlv.Context(4), 0x000E) // Attribute
+	w.PutNull(tlv.Context(5))         // ListIndex (null)
+	w.EndContainer()
+	data, err := w.Bytes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := tlv.NewReader(data)
+	if !r.Next() {
+		t.Fatal("no element")
+	}
+	p, err := decodeAttrPath(r)
+	if err != nil {
+		t.Fatalf("decodeAttrPath rejected extra members: %v", err)
+	}
+	if p.Endpoint != 3 || p.Cluster != 0x0102 || p.Attribute != 0x000E {
+		t.Fatalf("path = %+v", p)
 	}
 }
 

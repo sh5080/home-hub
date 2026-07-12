@@ -55,17 +55,17 @@ const (
 
 // Element-type values occupying the low five bits of the control byte.
 const (
-	etInt8       byte = 0x00 // 0x00..0x03: signed 1/2/4/8 bytes
-	etUint8      byte = 0x04 // 0x04..0x07: unsigned 1/2/4/8 bytes
-	etBoolFalse  byte = 0x08
-	etBoolTrue   byte = 0x09
-	etFloat32    byte = 0x0A
-	etFloat64    byte = 0x0B
-	etUTF8Len1   byte = 0x0C // 0x0C..0x0F: UTF-8, length field 1/2/4/8 bytes
-	etBytesLen1  byte = 0x10 // 0x10..0x13: octets, length field 1/2/4/8 bytes
-	etNull       byte = 0x14
-	etStructure  byte = 0x15
-	etArray      byte = 0x16
-	etList       byte = 0x17
-	etEndOfCont  byte = 0x18
+	etInt8      byte = 0x00 // 0x00..0x03: signed 1/2/4/8 bytes
+	etUint8     byte = 0x04 // 0x04..0x07: unsigned 1/2/4/8 bytes
+	etBoolFalse byte = 0x08
+	etBoolTrue  byte = 0x09
+	etFloat32   byte = 0x0A
+	etFloat64   byte = 0x0B
+	etUTF8Len1  byte = 0x0C // 0x0C..0x0F: UTF-8, length field 1/2/4/8 bytes
+	etBytesLen1 byte = 0x10 // 0x10..0x13: octets, length field 1/2/4/8 bytes
+	etNull      byte = 0x14
+	etStructure byte = 0x15
+	etArray     byte = 0x16
+	etList      byte = 0x17
+	etEndOfCont byte = 0x18
 )

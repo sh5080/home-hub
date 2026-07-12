@@ -208,21 +208,27 @@ type NOCResponseFields struct {
 	FabricIndex uint8
 }
 
-// DecodeNOCResponse parses a NOCResponse command's fields.
+// DecodeNOCResponse parses a NOCResponse command's fields ({0: StatusCode,
+// 1: FabricIndex, 2: DebugText}). Only 0 and 1 are uints; DebugText (a string,
+// common on the failure path) must be skipped, not force a uint decode.
 func DecodeNOCResponse(fields []byte) (NOCResponseFields, error) {
 	var out NOCResponseFields
 	r := tlv.NewReader(fields)
 	for r.Next() {
+		var dst *uint8
+		switch r.Tag().Num {
+		case 0:
+			dst = &out.Status
+		case 1:
+			dst = &out.FabricIndex
+		default:
+			continue
+		}
 		v, err := r.Uint()
 		if err != nil {
 			return out, err
 		}
-		switch r.Tag().Num {
-		case 0:
-			out.Status = uint8(v)
-		case 1:
-			out.FabricIndex = uint8(v)
-		}
+		*dst = uint8(v)
 	}
 	return out, r.Err()
 }

@@ -32,20 +32,33 @@ func decodeAttrPath(r *tlv.Reader) (AttributePath, error) {
 		return p, err
 	}
 	for r.Next() {
+		// Only the endpoint/cluster/attribute members are unsigned ints. Other
+		// spec-legal members (0: EnableTagCompression bool, 5: ListIndex
+		// nullable) must be skipped without demanding a uint, or a device that
+		// echoes them would abort decoding of the whole report.
+		var field *uint32
+		var ep *uint16
+		switch r.Tag().Num {
+		case 2:
+			ep = &p.Endpoint
+		case 3:
+			field = &p.Cluster
+		case 4:
+			field = &p.Attribute
+		default:
+			continue
+		}
 		v, err := r.Uint()
 		if err != nil {
 			return p, err
 		}
-		switch r.Tag().Num {
-		case 2:
-			p.Endpoint = uint16(v)
-		case 3:
-			p.Cluster = uint32(v)
-		case 4:
-			p.Attribute = uint32(v)
+		if ep != nil {
+			*ep = uint16(v)
+		} else {
+			*field = uint32(v)
 		}
 	}
-	return p, nil
+	return p, r.Err()
 }
 
 // EncodeReadRequest builds a ReadRequestMessage for the given attribute paths.

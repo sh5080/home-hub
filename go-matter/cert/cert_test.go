@@ -6,7 +6,7 @@ import (
 )
 
 func u16(v uint16) *uint16 { return &v }
-func u8(v uint8) *uint8     { return &v }
+func u8(v uint8) *uint8    { return &v }
 
 // noc builds a leaf (NOC-shaped) certificate exercising every modeled field.
 func noc() *Cert {

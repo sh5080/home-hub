@@ -32,12 +32,12 @@ func derTLV(tag byte, content []byte) []byte {
 	return append(out, content...)
 }
 
-func derSeq(parts ...[]byte) []byte { return derTLV(0x30, concat(parts...)) }
-func derSet(parts ...[]byte) []byte { return derTLV(0x31, concat(parts...)) }
-func derOID(oid []byte) []byte      { return derTLV(0x06, oid) }
+func derSeq(parts ...[]byte) []byte  { return derTLV(0x30, concat(parts...)) }
+func derSet(parts ...[]byte) []byte  { return derTLV(0x31, concat(parts...)) }
+func derOID(oid []byte) []byte       { return derTLV(0x06, oid) }
 func derOctet(content []byte) []byte { return derTLV(0x04, content) }
-func derUTF8(s string) []byte       { return derTLV(0x0c, []byte(s)) }
-func derPrintable(s string) []byte  { return derTLV(0x13, []byte(s)) }
+func derUTF8(s string) []byte        { return derTLV(0x0c, []byte(s)) }
+func derPrintable(s string) []byte   { return derTLV(0x13, []byte(s)) }
 
 func derBool(b bool) []byte {
 	if b {
