@@ -47,7 +47,7 @@ func TestLoadGoMatter(t *testing.T) {
 
 func TestLoadGoMatterMissingBlock(t *testing.T) {
 	c := &Config{Devices: []DeviceConfig{{
-		Device: domain.Device{ID: "blind1", Integration: domain.Matter},
+		Device: domain.Device{ID: "blind1", Integration: domain.Matter, Type: domain.TypeCover},
 		Driver: "go-matter",
 	}}}
 	if err := c.validate(); err == nil {
@@ -57,7 +57,7 @@ func TestLoadGoMatterMissingBlock(t *testing.T) {
 
 func TestLoadGoMatterMissingFields(t *testing.T) {
 	c := &Config{Devices: []DeviceConfig{{
-		Device:   domain.Device{ID: "blind1", Integration: domain.Matter},
+		Device:   domain.Device{ID: "blind1", Integration: domain.Matter, Type: domain.TypeCover},
 		Driver:   "go-matter",
 		GoMatter: &GoMatterDevice{Address: "192.168.1.20:5540"}, // no fabricStore/nodeId
 	}}}
@@ -69,12 +69,32 @@ func TestLoadGoMatterMissingFields(t *testing.T) {
 func TestLoadGoMatterAddressOptional(t *testing.T) {
 	// No address is valid: the device is resolved over mDNS by node id.
 	c := &Config{Devices: []DeviceConfig{{
-		Device:   domain.Device{ID: "blind1", Integration: domain.Matter},
+		Device:   domain.Device{ID: "blind1", Integration: domain.Matter, Type: domain.TypeCover},
 		Driver:   "go-matter",
 		GoMatter: &GoMatterDevice{FabricStore: "/x/fabric.json", NodeID: 1},
 	}}}
 	if err := c.validate(); err != nil {
 		t.Fatalf("address-less gomatter should validate: %v", err)
+	}
+}
+
+func TestValidateDeviceRejects(t *testing.T) {
+	// A matter device that is not a cover must be rejected (it would be
+	// mis-routed as one).
+	nonCover := &Config{Devices: []DeviceConfig{{
+		Device:   domain.Device{ID: "x", Integration: domain.Matter, Type: domain.TypeLight},
+		Driver:   "go-matter",
+		GoMatter: &GoMatterDevice{FabricStore: "/x", NodeID: 1},
+	}}}
+	if err := nonCover.validate(); err == nil {
+		t.Fatal("matter non-cover must be rejected")
+	}
+	// A zigbee device without addr must be rejected.
+	noAddr := &Config{Devices: []DeviceConfig{{
+		Device: domain.Device{ID: "y", Integration: domain.Zigbee, Type: domain.TypeSwitch},
+	}}}
+	if err := noAddr.validate(); err == nil {
+		t.Fatal("zigbee device without addr must be rejected")
 	}
 }
 
@@ -105,12 +125,29 @@ func TestLoadExampleConfig(t *testing.T) {
 	}
 }
 
+// TestLoadPhase1Config guards the Phase 1 (lights-only) starter config from
+// docs/ROLLOUT.md so it stays loadable as the schema evolves.
+func TestLoadPhase1Config(t *testing.T) {
+	c, err := Load(filepath.Join("..", "..", "configs", "phase1-lights.yaml"))
+	if err != nil {
+		t.Fatalf("phase1 config invalid: %v", err)
+	}
+	if len(c.Devices) == 0 {
+		t.Fatal("phase1 config has no devices")
+	}
+	for _, d := range c.Devices {
+		if d.Type != domain.TypeLight {
+			t.Fatalf("phase1 config should be lights only, got %q on %s", d.Type, d.ID)
+		}
+	}
+}
+
 func TestValidateButtonRule(t *testing.T) {
 	base := func(r RuleConfig) *Config {
 		return &Config{
 			Devices: []DeviceConfig{
-				{Device: domain.Device{ID: "sw"}},
-				{Device: domain.Device{ID: "fan"}},
+				{Device: domain.Device{ID: "sw", Integration: domain.Zigbee, Type: domain.TypeSwitch, Addr: "0x01"}},
+				{Device: domain.Device{ID: "fan", Integration: domain.MQTT, Type: domain.TypeFan, Addr: "home/fan"}},
 			},
 			Rules: []RuleConfig{r},
 		}
@@ -134,8 +171,8 @@ func TestValidateThresholdRule(t *testing.T) {
 	above, below := 65.0, 55.0
 	c := &Config{
 		Devices: []DeviceConfig{
-			{Device: domain.Device{ID: "hum"}},
-			{Device: domain.Device{ID: "dehum"}},
+			{Device: domain.Device{ID: "hum", Integration: domain.MQTT, Type: domain.TypeHumidity, Addr: "home/hum"}},
+			{Device: domain.Device{ID: "dehum", Integration: domain.MQTT, Type: domain.TypeSwitch, Addr: "home/dehum"}},
 		},
 		Rules: []RuleConfig{{Type: "threshold", Src: "hum", Dst: "dehum", Above: &above, Below: &below}},
 	}
@@ -151,7 +188,7 @@ func TestValidateThresholdRule(t *testing.T) {
 
 func TestValidateDelegatedNeedsTriggers(t *testing.T) {
 	c := &Config{Devices: []DeviceConfig{{
-		Device: domain.Device{ID: "b1", Integration: domain.Matter},
+		Device: domain.Device{ID: "b1", Integration: domain.Matter, Type: domain.TypeCover},
 		Driver: "delegated",
 	}}}
 	if err := c.validate(); err == nil {

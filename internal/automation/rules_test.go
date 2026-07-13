@@ -52,6 +52,60 @@ func TestButtonRuleCoverActions(t *testing.T) {
 	}
 }
 
+func TestCycleRuleSteps(t *testing.T) {
+	// off → 3단(50) → 6단(100) → off, wrapping. Starts at states[0]=off.
+	r := CycleRule("btn", domain.PressSingle, "fan", []int{0, 50, 100}, "")
+	press := domain.Event{DeviceID: "btn", Kind: domain.EventButton, Press: domain.PressSingle}
+
+	step := func(want int, wantOff bool) {
+		t.Helper()
+		cmds := r(press)
+		if len(cmds) != 1 || cmds[0].DeviceID != "fan" {
+			t.Fatalf("cmds = %+v", cmds)
+		}
+		if wantOff {
+			if cmds[0].Action != domain.ActionSetOn || cmds[0].Value.(bool) {
+				t.Fatalf("want off, got %+v", cmds[0])
+			}
+			return
+		}
+		if cmds[0].Action != domain.ActionSetLevel || cmds[0].Value.(int) != want {
+			t.Fatalf("want level %d, got %+v", want, cmds[0])
+		}
+	}
+	step(50, false)  // 1st press: off → 3단
+	step(100, false) // 2nd: → 6단
+	step(0, true)    // 3rd: → off
+	step(50, false)  // wraps: → 3단
+}
+
+func TestCycleRuleIgnoresAndResets(t *testing.T) {
+	r := CycleRule("btn", domain.PressSingle, "light", []int{0, 100}, "power")
+	press := domain.Event{DeviceID: "btn", Kind: domain.EventButton, Press: domain.PressSingle}
+
+	// Wrong device / press kind are ignored.
+	if got := r(domain.Event{DeviceID: "other", Kind: domain.EventButton, Press: domain.PressSingle}); got != nil {
+		t.Fatalf("other device should not match: %+v", got)
+	}
+	if got := r(domain.Event{DeviceID: "btn", Kind: domain.EventButton, Press: domain.PressDouble}); got != nil {
+		t.Fatalf("wrong press should not match: %+v", got)
+	}
+
+	// First press turns on; second returns to off.
+	if cmds := r(press); cmds[0].Action != domain.ActionSetLevel || cmds[0].Value.(int) != 100 {
+		t.Fatalf("first press = %+v", cmds)
+	}
+	// Power off resets the sequence (no command emitted).
+	off := domain.Event{DeviceID: "power", Kind: domain.EventStateChanged, State: domain.State{On: domain.BoolPtr(false)}}
+	if got := r(off); got != nil {
+		t.Fatalf("power-off should emit nothing: %+v", got)
+	}
+	// After reset, next press starts from states[0] again → states[1]=on.
+	if cmds := r(press); cmds[0].Action != domain.ActionSetLevel || cmds[0].Value.(int) != 100 {
+		t.Fatalf("post-reset press should turn on again: %+v", cmds)
+	}
+}
+
 func TestThresholdRuleHysteresis(t *testing.T) {
 	r := ThresholdRule("humid", "dehumidifier", 65, 55)
 	ev := func(v float64) domain.Event {

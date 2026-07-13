@@ -101,7 +101,7 @@ func main() {
 		Storage:    cfg.Zigbee.Storage,
 		PermitJoin: cfg.Zigbee.PermitJoin,
 	}, b, reg, log)
-	mq := mqtt.New(cfg.MQTT.Listen, b, log)
+	mq := mqtt.New(cfg.MQTT.Listen, b, reg, log)
 	hk := homekit.New(homekit.Config{
 		Name:    cfg.HomeKit.Name,
 		Pin:     cfg.HomeKit.Pin,
@@ -156,6 +156,8 @@ func main() {
 			auto.Add(automation.MirrorRule(r.Src, r.Dst))
 		case "button":
 			auto.Add(automation.ButtonRule(r.Src, r.Press, r.Dst, r.Action, r.Value, reg.State))
+		case "cycle":
+			auto.Add(automation.CycleRule(r.Src, r.Press, r.Dst, r.States, r.Power))
 		case "threshold":
 			auto.Add(automation.ThresholdRule(r.Src, r.Dst, *r.Above, *r.Below))
 		}

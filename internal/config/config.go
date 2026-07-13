@@ -66,10 +66,13 @@ type GoMatterDevice struct {
 //   - mirror:    mirror the on/off state of Src onto Dst.
 //   - button:    when Src emits a button event with Press, run Action on Dst
 //     (toggle | on | off | open | close | position, with Value for position).
+//   - cycle:     each Press from Src steps Dst through States (levels 0..100,
+//     0=off) — e.g. off→50→100→off. Power (optional) resets the cycle when it
+//     turns off (L1 relay / all-off).
 //   - threshold: hysteresis on a sensor value — Dst turns on at/above Above
 //     and off at/below Below (e.g. humidity → dehumidifier).
 type RuleConfig struct {
-	Type string `yaml:"type"` // "mirror" | "button" | "threshold"
+	Type string `yaml:"type"` // "mirror" | "button" | "cycle" | "threshold"
 	Src  string `yaml:"src"`
 	Dst  string `yaml:"dst"`
 
@@ -77,6 +80,10 @@ type RuleConfig struct {
 	Press  string `yaml:"press,omitempty"`  // single | double | hold
 	Action string `yaml:"action,omitempty"` // toggle | on | off | open | close | position
 	Value  int    `yaml:"value,omitempty"`  // position percent for action=position
+
+	// cycle rules
+	States []int  `yaml:"states,omitempty"` // levels to step through, 0=off
+	Power  string `yaml:"power,omitempty"`  // optional device whose off resets the cycle
 
 	// threshold rules
 	Above *float64 `yaml:"above,omitempty"`
@@ -100,25 +107,51 @@ func Load(path string) (*Config, error) {
 }
 
 func (c *Config) validate() error {
-	seen := make(map[string]bool)
+	byID := make(map[string]domain.Device, len(c.Devices))
 	for _, d := range c.Devices {
 		if d.ID == "" {
 			return fmt.Errorf("device with empty id")
 		}
-		if seen[d.ID] {
+		if _, dup := byID[d.ID]; dup {
 			return fmt.Errorf("duplicate device id: %s", d.ID)
 		}
-		seen[d.ID] = true
-		if d.Integration == domain.Matter {
-			if err := validateMatterDevice(d); err != nil {
-				return err
-			}
+		byID[d.ID] = d.Device
+		if err := validateDevice(d); err != nil {
+			return err
 		}
 	}
 	for i, r := range c.Rules {
-		if err := validateRule(i, r, seen); err != nil {
+		if err := validateRule(i, r, byID); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// validTypes is the set of device types the hub knows how to expose/route.
+var validTypes = map[domain.DeviceType]bool{
+	domain.TypeSwitch: true, domain.TypeLight: true, domain.TypeFan: true,
+	domain.TypeCover: true, domain.TypeSensor: true, domain.TypeHumidity: true,
+}
+
+func validateDevice(d DeviceConfig) error {
+	if !validTypes[d.Type] {
+		return fmt.Errorf("device %s: unknown type %q", d.ID, d.Type)
+	}
+	switch d.Integration {
+	case domain.Zigbee, domain.MQTT:
+		if d.Addr == "" {
+			return fmt.Errorf("device %s: %s device requires addr", d.ID, d.Integration)
+		}
+	case domain.Matter:
+		// Matter devices are routed as covers (open/close/position); any other
+		// type would be silently mishandled by the command router.
+		if d.Type != domain.TypeCover {
+			return fmt.Errorf("device %s: matter devices must be type cover, got %q", d.ID, d.Type)
+		}
+		return validateMatterDevice(d)
+	default:
+		return fmt.Errorf("device %s: unknown integration %q", d.ID, d.Integration)
 	}
 	return nil
 }
@@ -145,16 +178,20 @@ func validateMatterDevice(d DeviceConfig) error {
 	return nil
 }
 
-func validateRule(i int, r RuleConfig, seen map[string]bool) error {
-	if !seen[r.Src] {
+func validateRule(i int, r RuleConfig, byID map[string]domain.Device) error {
+	src, ok := byID[r.Src]
+	if !ok {
 		return fmt.Errorf("rule %d: unknown src device %q", i, r.Src)
 	}
-	if !seen[r.Dst] {
+	if _, ok := byID[r.Dst]; !ok {
 		return fmt.Errorf("rule %d: unknown dst device %q", i, r.Dst)
 	}
 	switch r.Type {
 	case "mirror":
 	case "button":
+		if src.Integration != domain.Zigbee {
+			return fmt.Errorf("rule %d: button src %q must be a zigbee device (only those emit button events)", i, r.Src)
+		}
 		switch r.Press {
 		case "single", "double", "hold":
 		default:
@@ -169,7 +206,32 @@ func validateRule(i int, r RuleConfig, seen map[string]bool) error {
 		default:
 			return fmt.Errorf("rule %d: unknown button action %q", i, r.Action)
 		}
+	case "cycle":
+		if src.Integration != domain.Zigbee {
+			return fmt.Errorf("rule %d: cycle src %q must be a zigbee device (only those emit button events)", i, r.Src)
+		}
+		switch r.Press {
+		case "single", "double", "hold":
+		default:
+			return fmt.Errorf("rule %d: cycle press must be single|double|hold, got %q", i, r.Press)
+		}
+		if len(r.States) < 2 {
+			return fmt.Errorf("rule %d: cycle needs at least 2 states", i)
+		}
+		for _, s := range r.States {
+			if s < 0 || s > 100 {
+				return fmt.Errorf("rule %d: cycle state %d out of range [0,100]", i, s)
+			}
+		}
+		if r.Power != "" {
+			if _, ok := byID[r.Power]; !ok {
+				return fmt.Errorf("rule %d: unknown cycle power device %q", i, r.Power)
+			}
+		}
 	case "threshold":
+		if src.Type != domain.TypeSensor && src.Type != domain.TypeHumidity {
+			return fmt.Errorf("rule %d: threshold src %q must be a sensor/humidity device", i, r.Src)
+		}
 		if r.Above == nil || r.Below == nil {
 			return fmt.Errorf("rule %d: threshold requires above and below", i)
 		}

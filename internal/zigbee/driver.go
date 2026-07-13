@@ -292,6 +292,12 @@ func (d *Driver) Apply(cmd domain.Command) error {
 		}
 		// Domain position is percent-open; ZCL lift percentage is percent-closed.
 		cluster, frame = covCluster, d.zclCommand(covCmdGoToLift, byte(100-p))
+	case domain.ActionSetLevel:
+		// Level Control (dimming/speed) is not implemented for Zigbee — the
+		// target devices are on/off downlights. Log rather than silently drop so
+		// a misconfigured dimmable device is noticed.
+		d.log.Warn("zigbee: SetLevel not supported; ignoring", "device", cmd.DeviceID)
+		return nil
 	default:
 		return nil
 	}

@@ -49,6 +49,38 @@ func ButtonRule(srcID, press, dstID, action string, value int, state StateGetter
 	}
 }
 
+// CycleRule steps dstID through a list of levels on each matching button press
+// from a decoupled wall paddle: press → states[1] → states[2] → … → states[0] →
+// wrapping around. Each level is 0..100; 0 emits off, >0 emits a level command
+// (light brightness or fan speed). This is how one paddle drives a multi-step
+// device the relay can't — e.g. the BLE ceiling fan: off→3단(50)→6단(100)→off.
+//
+// The sequence starts at states[0] (assumed the fixture's off/boot state), so
+// the first press advances to states[1]. When powerID is set, the cycle resets
+// to states[0] whenever that device turns off — the L1 relay cutting the
+// fixture's power, or a whole-home "all off" — so the next press starts clean.
+func CycleRule(srcID, press, dstID string, states []int, powerID string) Rule {
+	idx := 0
+	return func(e domain.Event) []domain.Command {
+		if powerID != "" && e.DeviceID == powerID && e.Kind == domain.EventStateChanged &&
+			e.State.On != nil && !*e.State.On {
+			idx = 0 // fixture lost power; restart the sequence
+			return nil
+		}
+		if e.DeviceID != srcID || e.Kind != domain.EventButton || e.Press != press {
+			return nil
+		}
+		if len(states) == 0 {
+			return nil
+		}
+		idx = (idx + 1) % len(states)
+		if lvl := states[idx]; lvl > 0 {
+			return []domain.Command{domain.SetLevel(dstID, lvl)}
+		}
+		return []domain.Command{domain.SetOn(dstID, false)}
+	}
+}
+
 // ThresholdRule turns dstID on when srcID's sensor value reaches above, and off
 // when it falls to below (hysteresis so the device does not flap around one
 // setpoint) — e.g. humidity ≥ 65% → dehumidifier on, ≤ 55% → off. Commands are
