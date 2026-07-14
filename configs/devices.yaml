@@ -12,7 +12,8 @@ zigbee:
 
 mqtt:
   listen: ":1883"             # embedded broker for ESP32 bridges
-                              # device topics: home/<id>/state (report), home/<id>/set (command)
+                              # topics: <addr>/state (report), <addr>/set (command);
+                              # addr defaults to home/<id> when omitted
 
 devices:
   # Multi-gang Zigbee wall switch: one device per gang, same address.
@@ -21,16 +22,21 @@ devices:
 
   # A wall switch used as a button controller (decoupled mode): its presses
   # drive OTHER devices via the button rules below.
-  - {id: button_1, name: "Wall Button", integration: zigbee, addr: "0x00158d0001abcd02", type: switch}
+  - {id: button_1, name: "Wall Button", integration: zigbee, addr: "0x00158d0001abcd02", type: switch, decoupled: true}
 
   # Zigbee curtain motor (Window Covering cluster).
   - {id: curtain_1, name: "Curtain", integration: zigbee, addr: "0x00158d0001abcd03", type: cover}
 
-  # RF ceiling fan behind an ESP32 RF bridge (MQTT). level = fan speed 0..100.
-  - {id: fan_1, name: "Ceiling Fan", integration: mqtt, addr: "home/fan_1", type: fan}
+  # Light-integrated ceiling fan behind one ESP32 bridge, modeled as TWO logical
+  # devices so the light and the fan are controlled INDEPENDENTLY (HomeKit shows
+  # a separate lightbulb and fan). The ESP32 subscribes to both set-topics.
+  # level on the fan = speed 0..100. features opt the light into dimming/CCT/RGB
+  # and the fan into reversible spin (a plain downlight omits features → on/off).
+  - {id: ceiling_light, name: "Ceiling Light", integration: mqtt, addr: "home/ceiling/light", type: light, features: [brightness, colortemp, color]}
+  - {id: ceiling_fan,   name: "Ceiling Fan",   integration: mqtt, addr: "home/ceiling/fan",   type: fan, features: [direction]}
 
   # ESP32 humidity sensor + a smart-plug dehumidifier.
-  - {id: humidity_1,     name: "Humidity",     integration: mqtt, addr: "home/humidity_1",     type: sensor}
+  - {id: humidity_1,     name: "Humidity",     integration: mqtt, addr: "home/humidity_1",     type: humidity}
   - {id: dehumidifier_1, name: "Dehumidifier", integration: mqtt, addr: "home/dehumidifier_1", type: switch}
 
   # Matter blind, natively controlled by the hub over CASE (go-matter).
@@ -57,10 +63,16 @@ devices:
 
 # Automation rules evaluated inside the hub.
 rules:
-  # Wall button (decoupled) single press toggles the RF fan.
-  - {type: button, src: button_1, press: single, dst: fan_1, action: toggle}
-  # Double press opens the Matter blind; hold closes it.
-  - {type: button, src: button_1, press: double, dst: blind_1, action: open}
-  - {type: button, src: button_1, press: hold,   dst: blind_1, action: close}
+  # Wall button (decoupled): single press toggles the ceiling light, double
+  # press toggles the fan — each independently.
+  - {type: button, src: button_1, press: single, dst: ceiling_light, action: toggle}
+  - {type: button, src: button_1, press: double, dst: ceiling_fan,   action: toggle}
+  # Alternatively, a paddle can CYCLE a device through steps instead of toggling
+  # — how the bedroom fan is driven: one paddle steps off→3단(50)→6단(100)→off.
+  # power resets the sequence when the fixture loses power (L1 relay / all-off).
+  # - {type: cycle, src: button_1, press: single, dst: ceiling_light, states: [0, 50, 100]}
+  # - {type: cycle, src: button_1, press: double, dst: ceiling_fan,   states: [0, 50, 100], power: light_main}
+  # Hold opens the Matter blind (press it again from HomeKit to close).
+  - {type: button, src: button_1, press: hold,   dst: blind_1,       action: open}
   # Humidity hysteresis: dehumidifier on at 65%, off at 55%.
   - {type: threshold, src: humidity_1, dst: dehumidifier_1, above: 65, below: 55}

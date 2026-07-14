@@ -1,0 +1,41 @@
+# Phase 1 — lights only (see docs/ROLLOUT.md).
+#
+# Minimal config to bring up just the Aqara H2 lights over HomeKit before any
+# blinds/curtains/fans. Run the hub with:
+#   go run ./cmd/hub --config configs/phase1-lights.yaml
+#
+# Pairing: set permitJoin: true, start the hub, put the H2 into pairing mode,
+# read the "zigbee node joined ieee=0x..." log line, put that address below,
+# then set permitJoin: false and restart.
+
+homekit:
+  name: "Home Hub"
+  pin: "74329816"             # 8-digit HAP pairing code (shown to iPhone)
+  port: "51826"
+  storage: "./hap-data"
+
+zigbee:
+  port: /dev/ttyUSB0         # your Zigbee coordinator
+  storage: "./zigbee-data"   # keep this: survives restarts without re-pairing
+  permitJoin: false          # flip to true ONLY while pairing a new switch
+
+# The embedded MQTT broker still starts (harmless with no MQTT devices); it is
+# used from Phase 3 onward. Remove this block if you prefer not to open :1883.
+mqtt:
+  listen: ":1883"
+
+devices:
+  # Replace the addr with each switch's real IEEE address from the join log.
+  # A 2-gang H2 is TWO devices at the same address, endpoints 1 and 2.
+  - {id: living_main,    name: "Living Main Light",    integration: zigbee, addr: "0x00158d0001000001", type: light, endpoint: 1}
+  - {id: living_ambient, name: "Living Ambient Light", integration: zigbee, addr: "0x00158d0001000001", type: light, endpoint: 2}
+
+  - {id: study_main,     name: "Study Main Light",     integration: zigbee, addr: "0x00158d0001000002", type: light, endpoint: 1}
+  - {id: study_ambient,  name: "Study Ambient Light",  integration: zigbee, addr: "0x00158d0001000002", type: light, endpoint: 2}
+
+  # Bedroom ceiling-light (if wired to an H2 relay). If it is RF-only, it comes
+  # in Phase 3 with the ESP32 bridge instead.
+  - {id: bedroom_light,  name: "Bedroom Ceiling Light", integration: zigbee, addr: "0x00158d0001000003", type: light, endpoint: 1}
+
+# No automation rules yet — add button/threshold rules in later phases.
+rules: []
