@@ -129,16 +129,18 @@ zigbee:
   permitJoin: false           # 페어링할 때만 true
 
 mqtt:
-  listen: ":1883"             # 내장 브로커; home/<id>/state ↔ home/<id>/set
+  listen: ":1883"             # 내장 브로커; 토픽 베이스=addr(또는 home/<id>): <base>/state ↔ <base>/set
 
 devices:
   # 멀티갱 스위치: 같은 addr + endpoint 로 갱 구분
   - {id: light_1,  integration: zigbee, addr: "0x00158d0001abcd01", type: light, endpoint: 1}
   - {id: light_2,  integration: zigbee, addr: "0x00158d0001abcd01", type: light, endpoint: 2}
-  - {id: switch_1, integration: zigbee, addr: "0x00158d0001abcd02", type: switch} # decoupled 버튼
-  - {id: fan_1,    integration: mqtt,   addr: "home/fan_1",         type: fan}    # level = 팬 속도
+  - {id: switch_1, integration: zigbee, addr: "0x00158d0001abcd02", type: switch, decoupled: true} # 버튼
+  # 조명일체형 팬 = 논리 디바이스 2개(조명+팬)로 분리 → 각각 독립 제어
+  - {id: fan_light, integration: mqtt, addr: "home/ceiling/light", type: light}
+  - {id: fan_1,     integration: mqtt, addr: "home/ceiling/fan",   type: fan}   # level = 팬 속도
 
-  # Matter 기기: go-matter 네이티브 (권장) 또는 HomeKit 위임
+  # Matter 기기: go-matter 네이티브 (권장, type은 cover만) 또는 HomeKit 위임
   - id: blind_1
     integration: matter
     type: cover
@@ -147,9 +149,9 @@ devices:
 
 rules:
   # 벽 버튼(decoupled) → 다른 기기 (toggle|on|off|open|close|position)
-  - {type: button, src: switch_1, press: single, dst: fan_1, action: toggle}
-  - {type: button, src: switch_1, press: double, dst: blind_1, action: open}
-  # 센서 임계값 히스테리시스는 threshold 규칙 (예: 습도→제습기, above/below)
+  - {type: button, src: switch_1, press: single, dst: fan_light, action: toggle}
+  - {type: button, src: switch_1, press: double, dst: fan_1,     action: toggle}
+  # 센서 임계값 히스테리시스 (예: 습도 humidity → 제습기, above/below)
 ```
 
 전체 예시는 `configs/devices.yaml` 참고 (예시 config는 config 테스트가 항상 검증한다).
