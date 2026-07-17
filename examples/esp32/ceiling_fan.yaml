@@ -1,10 +1,13 @@
-# ESPHome: RF ceiling-fan + light bridge for the home-hub MQTT convention.
+# ESPHome: light-integrated RF ceiling-fan bridge for the home-hub MQTT
+# convention. One ESP32 drives BOTH the light and the fan, exposed to the hub
+# as TWO independent devices (so HomeKit shows a separate lightbulb and fan):
 #
-# Device id in configs/devices.yaml: fan_1  (integration: mqtt, addr: home/fan_1)
-# Subscribes home/fan_1/set, publishes home/fan_1/state.
+#   configs/devices.yaml:
+#     - {id: ceiling_light, integration: mqtt, addr: home/ceiling/light, type: light}
+#     - {id: ceiling_fan,   integration: mqtt, addr: home/ceiling/fan,   type: fan}
 #
-# The ESP32 owns the RF codes; the hub only sends intent {"on":..,"level":..}.
-# Replace the remote_transmitter codes with ones captured from your remote.
+# Topics: <addr>/set (hub → device), <addr>/state (device → hub).
+# Replace the remote_transmitter codes with ones captured from your RF remote.
 
 esphome:
   name: ceiling-fan-bridge
@@ -14,38 +17,41 @@ esp32:
 
 logger:
 
-# Point this at the hub's embedded broker (mqtt.listen in the hub config).
 mqtt:
   broker: 192.168.1.10
   port: 1883
-  # No HA discovery: the hub is the broker and speaks its own topic convention.
   discovery: false
   topic_prefix: null
   on_json_message:
-    # home/fan_1/set → drive the fan
-    - topic: home/fan_1/set
+    # LIGHT: home/ceiling/light/set  →  {"on": bool}
+    - topic: home/ceiling/light/set
       then:
         - lambda: |-
             if (x.containsKey("on")) {
-              if (x["on"]) { id(fan_light).turn_on(); }
-              else { id(fan_light).turn_off(); }
+              id(light_is_on) = x["on"];
+              if (x["on"]) id(light_on).press(); else id(light_off).press();
+              id(publish_light).execute();
             }
+    # FAN: home/ceiling/fan/set  →  {"on": bool, "level": 0..100}
+    - topic: home/ceiling/fan/set
+      then:
+        - lambda: |-
+            if (x.containsKey("on") && !x["on"]) { id(fan_off).press(); id(fan_level) = 0; }
             if (x.containsKey("level")) {
               int lvl = x["level"];
-              // Map 0..100 to the fan's discrete speeds and fire the matching RF code.
-              if (lvl <= 0)       id(rf_fan_off).press();
-              else if (lvl < 34)  id(rf_fan_low).press();
-              else if (lvl < 67)  id(rf_fan_med).press();
-              else                id(rf_fan_high).press();
+              if (lvl <= 0)      id(fan_off).press();
+              else if (lvl < 34) id(fan_low).press();
+              else if (lvl < 67) id(fan_med).press();
+              else               id(fan_high).press();
               id(fan_level) = lvl;
-              id(publish_state).execute();
+            } else if (x.containsKey("on") && x["on"]) {
+              id(fan_med).press(); id(fan_level) = 50;   // plain "on" → a default speed
             }
+            id(publish_fan).execute();
 
 globals:
-  - id: fan_level
-    type: int
-    restore_value: false
-    initial_value: '0'
+  - {id: fan_level, type: int, restore_value: false, initial_value: '0'}
+  - {id: light_is_on, type: bool, restore_value: false, initial_value: 'false'}
 
 remote_transmitter:
   pin: GPIO4
@@ -53,61 +59,27 @@ remote_transmitter:
 
 # Placeholder RF codes — replace with codes captured from your remote.
 button:
-  - platform: template
-    id: rf_fan_off
-    on_press:
-      - remote_transmitter.transmit_rc_switch_raw:
-          code: "000000000000000000000001"
-          protocol: 1
-  - platform: template
-    id: rf_fan_low
-    on_press:
-      - remote_transmitter.transmit_rc_switch_raw:
-          code: "000000000000000000000010"
-          protocol: 1
-  - platform: template
-    id: rf_fan_med
-    on_press:
-      - remote_transmitter.transmit_rc_switch_raw:
-          code: "000000000000000000000011"
-          protocol: 1
-  - platform: template
-    id: rf_fan_high
-    on_press:
-      - remote_transmitter.transmit_rc_switch_raw:
-          code: "000000000000000000000100"
-          protocol: 1
+  - {platform: template, id: light_on,  on_press: {remote_transmitter.transmit_rc_switch_raw: {code: "000000000000000000001000", protocol: 1}}}
+  - {platform: template, id: light_off, on_press: {remote_transmitter.transmit_rc_switch_raw: {code: "000000000000000000001001", protocol: 1}}}
+  - {platform: template, id: fan_off,   on_press: {remote_transmitter.transmit_rc_switch_raw: {code: "000000000000000000000001", protocol: 1}}}
+  - {platform: template, id: fan_low,   on_press: {remote_transmitter.transmit_rc_switch_raw: {code: "000000000000000000000010", protocol: 1}}}
+  - {platform: template, id: fan_med,   on_press: {remote_transmitter.transmit_rc_switch_raw: {code: "000000000000000000000011", protocol: 1}}}
+  - {platform: template, id: fan_high,  on_press: {remote_transmitter.transmit_rc_switch_raw: {code: "000000000000000000000100", protocol: 1}}}
 
-# The integrated light, via a second RF code (or a relay if it is wired).
-light:
-  - platform: binary
-    id: fan_light
-    name: "Ceiling Fan Light"
-    output: light_output
-    on_turn_on:
-      - lambda: id(publish_state).execute();
-    on_turn_off:
-      - lambda: id(publish_state).execute();
-
-output:
-  - platform: template
-    id: light_output
-    type: binary
-    write_action:
-      - if:
-          condition:
-            lambda: 'return state;'
-          then:
-            - remote_transmitter.transmit_rc_switch_raw: {code: "000000000000000000001000", protocol: 1}
-          else:
-            - remote_transmitter.transmit_rc_switch_raw: {code: "000000000000000000001001", protocol: 1}
-
-# Publish current state back to the hub as home/fan_1/state.
+# Track light state so the light's on/off can be reported and toggled.
 script:
-  - id: publish_state
+  - id: publish_light
+    then:
+      - lambda: |-
+          // light_on/off presses set intent; mirror it here.
+          // (For a real relay, read the relay's actual state instead.)
+      - mqtt.publish_json:
+          topic: home/ceiling/light/state
+          payload: 'root["on"] = id(light_is_on);'
+  - id: publish_fan
     then:
       - mqtt.publish_json:
-          topic: home/fan_1/state
+          topic: home/ceiling/fan/state
           payload: |-
-            root["on"] = id(fan_light).current_values.is_on();
+            root["on"] = id(fan_level) > 0;
             root["level"] = id(fan_level);

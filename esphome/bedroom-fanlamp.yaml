@@ -1,0 +1,119 @@
+# 안방 조명일체형 실링팬 (FanLamp Pro, BLE) — Stage 1: 브링업 + 페어링.
+#
+# 목적: 허브/HA 없이 web_server(브라우저)로 직접 켜보고 variant(v1/v2/v3)를 찾는다.
+# 페어링 확정 후 Stage 2에서 허브 MQTT 브리지(home/bedroom/light|fan)를 추가한다.
+#
+# flash:  esphome run esphome/bedroom-fanlamp.yaml   (USB: /dev/cu.usbserial-10)
+# 로그:   esphome logs esphome/bedroom-fanlamp.yaml
+# WiFi 자격증명은 esphome/secrets.yaml 에서.
+
+esphome:
+  name: bedroom-fanlamp
+
+esp32:
+  board: esp32dev            # ESP32-WROOM-32D DevKitC
+  framework:
+    type: esp-idf
+
+logger:                      # 페어링 과정을 로그로 관찰
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  ap:                        # WiFi 실패 시 폴백 핫스팟(비번 몰라도 설정 가능)
+    ssid: "bedroom-fanlamp"
+
+captive_portal:              # 폴백 핫스팟 접속 시 WiFi 설정 페이지
+
+web_server:                  # http://<esp32-ip>/ 에서 조명/팬/Pair 직접 조작
+  port: 80
+
+ota:                         # 이후 무선(OTA) 업데이트 가능
+  - platform: esphome
+
+# 허브(home-hub) MQTT 브리지: 허브 규약 home/bedroom/light|fan 의 set/state.
+mqtt:
+  broker: 192.168.0.102      # Mac(허브) IP. 나중에 Pi로 바뀌면 여기만 변경
+  port: 1883
+  discovery: false
+  topic_prefix: null
+  on_json_message:
+    - topic: home/bedroom/light/set
+      then:
+        - lambda: |-
+            if (x.containsKey("on") && !x["on"]) { id(light_ble).turn_off().perform(); return; }
+            auto call = id(light_ble).turn_on();
+            if (x.containsKey("level"))     call.set_brightness(((int)x["level"]) / 100.0f);
+            if (x.containsKey("colortemp")) call.set_color_temperature((float)((int)x["colortemp"]));
+            if (x.containsKey("hue")) {                 // HSV(홈킷) → RGB
+              float h = (float)x["hue"], s = x.containsKey("sat") ? ((float)x["sat"])/100.0f : 1.0f;
+              float hh = h/60.0f, c = s, xc = c*(1-fabsf(fmodf(hh,2)-1)), r=0,g=0,b=0;
+              if (hh<1){r=c;g=xc;} else if(hh<2){r=xc;g=c;} else if(hh<3){g=c;b=xc;}
+              else if(hh<4){g=xc;b=c;} else if(hh<5){r=xc;b=c;} else {r=c;b=xc;}
+              call.set_rgb(r,g,b);
+            }
+            call.perform();
+    - topic: home/bedroom/fan/set
+      then:
+        - lambda: |-
+            if (x.containsKey("on") && !x["on"]) { id(fan_ble).turn_off().perform(); return; }
+            auto call = id(fan_ble).turn_on();
+            if (x.containsKey("level")) {
+              int lvl = x["level"];
+              if (lvl <= 0) { id(fan_ble).turn_off().perform(); return; }
+              int spd = (lvl * 6 + 99) / 100; if (spd < 1) spd = 1; if (spd > 6) spd = 6;
+              call.set_speed(spd);
+            }
+            if (x.containsKey("direction"))
+              call.set_direction(((int)x["direction"]) == 0 ? fan::FanDirection::FORWARD
+                                                            : fan::FanDirection::REVERSE);
+            call.perform();
+    # 무드등: home/bedroom/mood/set → {"on": bool} (on/off만 지원)
+    - topic: home/bedroom/mood/set
+      then:
+        - lambda: |-
+            if (x.containsKey("on")) {
+              if (x["on"]) id(light_mood).turn_on().perform();
+              else         id(light_mood).turn_off().perform();
+            }
+
+# FanLamp Pro BLE advertising 컨트롤러 (standalone ESPHome 컴포넌트).
+external_components:
+  - source: github://aronsky/esphome-components
+    components: [ ble_adv_controller ]
+
+ble_adv_controller:
+  - id: fanlamp
+    encoding: fanlamp_pro
+    variant: v3              # ★ 페어링으로 확정 (v3부터, 안 되면 v2/v1)
+    forced_id: 0
+    index: 0
+    duration: 200
+
+light:
+  # 메인 조명: on/off + 디밍(밝기). 이 램프는 색온도(CWW) 명령이 안 먹혀서
+  # 디밍만 사용. (색온도/RGB/무드는 FanLamp Pro 앱 전용 — 컴포넌트로 재현 불가)
+  - platform: ble_adv_controller
+    ble_adv_controller_id: fanlamp
+    id: light_ble
+    name: "안방 실링팬 조명"
+  # 무드등: 별도(secondary) 조명. 실제로 색상/밝기 뭐가 되는지는 웹 UI로 테스트.
+  - platform: ble_adv_controller
+    ble_adv_controller_id: fanlamp
+    id: light_mood
+    name: "안방 무드등"
+    secondary: true
+
+fan:
+  - platform: ble_adv_controller
+    ble_adv_controller_id: fanlamp
+    id: fan_ble
+    name: "안방 실링팬 팬"
+    speed_count: 6
+    use_direction: true
+
+button:
+  - platform: ble_adv_controller
+    ble_adv_controller_id: fanlamp
+    name: "Pair"
+    cmd: pair

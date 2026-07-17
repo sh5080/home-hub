@@ -1,0 +1,116 @@
+# ESPHome: 안방 조명일체형 실링팬 (BLE / FanLamp Pro) → home-hub MQTT 브리지.
+#
+# 유닛이 RF가 아니라 BLE 컨트롤러(FanLamp Pro 앱)라, ESP32 내장 BLE로 앱을 흉내낸다.
+# RF 모듈 불필요. 컴포넌트: https://github.com/NicoIIT/esphome-ble-adv-controller
+#
+# 허브 config(configs/devices.yaml)에는 두 논리 디바이스로 등록:
+#   - {id: bed_ceiling_light, integration: mqtt, addr: home/bedroom/light, type: light}
+#   - {id: bed_ceiling_fan,   integration: mqtt, addr: home/bedroom/fan,   type: fan}
+# 토픽: <addr>/set (허브→기기), <addr>/state (기기→허브).
+#
+# ★ variant(v1/v2/v3)는 페어링/리스닝으로 확정한다(docs/bedroom-fan-light.md §7).
+# ※ ble_adv_controller의 정확한 키/capability는 컴포넌트 README로 최종 확인.
+
+esphome:
+  name: bedroom-fanlamp
+
+esp32:
+  board: esp32dev          # ESP32-WROOM-32 DevKitC. (S2 금지: BLE 없음)
+
+logger:
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+mqtt:
+  broker: 192.168.1.10     # 허브 IP (지금은 Mac, 나중에 Pi)
+  port: 1883
+  discovery: false
+  topic_prefix: null
+  on_json_message:
+    # 조명: home/bedroom/light/set → {"on":bool,"level":0..100,"colortemp":mireds,"hue":0..360,"sat":0..100}
+    # ※ set_brightness/color_temperature/rgb 지원 여부는 페어링된 모델 + light type에 달림(README).
+    - topic: home/bedroom/light/set
+      then:
+        - lambda: |-
+            if (x.containsKey("on") && !x["on"]) { id(light_ble).turn_off().perform(); return; }
+            auto call = id(light_ble).turn_on();
+            if (x.containsKey("level"))     call.set_brightness(((int)x["level"]) / 100.0f);
+            if (x.containsKey("colortemp")) call.set_color_temperature((float)((int)x["colortemp"])); // mireds
+            if (x.containsKey("hue")) {                 // HSV(홈킷) → RGB
+              float h = (float)x["hue"], s = x.containsKey("sat") ? ((float)x["sat"])/100.0f : 1.0f;
+              float hh = h/60.0f, c = s, xc = c*(1-fabsf(fmodf(hh,2)-1)), r=0,g=0,b=0;
+              if (hh<1){r=c;g=xc;} else if(hh<2){r=xc;g=c;} else if(hh<3){g=c;b=xc;}
+              else if(hh<4){g=xc;b=c;} else if(hh<5){r=xc;b=c;} else {r=c;b=xc;}
+              call.set_rgb(r,g,b);
+            }
+            call.perform();
+    # 팬: home/bedroom/fan/set → {"on":bool,"level":0..100,"direction":0|1}
+    - topic: home/bedroom/fan/set
+      then:
+        - lambda: |-
+            if (x.containsKey("on") && !x["on"]) { id(fan_ble).turn_off().perform(); return; }
+            auto call = id(fan_ble).turn_on();
+            if (x.containsKey("level")) {
+              int lvl = x["level"];
+              if (lvl <= 0) { id(fan_ble).turn_off().perform(); return; }
+              int spd = (lvl * 6 + 99) / 100; if (spd < 1) spd = 1; if (spd > 6) spd = 6; // 0..100→1..6단
+              call.set_speed(spd);
+            }
+            if (x.containsKey("direction"))
+              call.set_direction(((int)x["direction"]) == 0 ? fan::FanDirection::FORWARD
+                                                            : fan::FanDirection::REVERSE);
+            call.perform();
+
+# --- FanLamp Pro BLE advertising 컨트롤러 ---
+external_components:
+  - source: github://NicoIIT/esphome-ble-adv-controller
+    refresh: 1d
+
+ble_adv_handler:
+
+ble_adv_controller:
+  - id: fanlamp
+    encoding: fanlamp_pro
+    variant: v3            # ★ 확정 필요 (v1/v2/v3). 우선 v3부터 페어링 시도.
+    # forced_id: 0x00000000  # 앱 리스닝으로 알아낸 값이 있으면 여기에.
+    duration: 200
+
+light:
+  - platform: ble_adv_controller
+    ble_adv_controller_id: fanlamp
+    id: light_ble
+    name: "안방 실링팬 조명"
+    # 모델이 조광/색온도면 type/traits 추가(README 참고). 단순 on/off면 기본.
+    on_state:
+      - mqtt.publish_json:
+          topic: home/bedroom/light/state
+          payload: 'root["on"] = id(light_ble).current_values.is_on();'
+
+fan:
+  - platform: ble_adv_controller
+    ble_adv_controller_id: fanlamp
+    id: fan_ble
+    name: "안방 실링팬 팬"
+    speed_count: 6
+    on_state:
+      - mqtt.publish_json:
+          topic: home/bedroom/fan/state
+          payload: |-
+            bool on = id(fan_ble).state;
+            int spd = id(fan_ble).speed;              // 1..6
+            root["on"] = on;
+            root["level"] = on ? (spd * 100 / 6) : 0; // 6단 → 0..100
+    # 모델이 정/역회전 지원하면 direction 추가.
+
+# 페어링/해제: 유닛 전원 넣고 수 초 내 Pair 실행.
+button:
+  - platform: ble_adv_controller
+    ble_adv_controller_id: fanlamp
+    name: "Pair"
+    cmd: pair
+  - platform: ble_adv_controller
+    ble_adv_controller_id: fanlamp
+    name: "Unpair"
+    cmd: unpair
