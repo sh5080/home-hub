@@ -1,0 +1,33 @@
+# Mac 데모용 최소 설정 — 하드웨어(동글/ESP32) 없이 소프트웨어 전 체인을 아이폰으로 검증.
+#
+# 실행:  go run ./cmd/hub --config configs/mac-demo.yaml
+#
+# 안방 실링팬 조명/팬을 "가짜 MQTT 기기"로 노출한다. 아이폰 홈 앱에서 페어링하면
+# 실링팬 조명(밝기·색온도·색상)과 팬(속도·방향)이 나타나고, 조작하면 허브가 MQTT
+# 명령을 발행한다(받는 ESP32는 아직 없어도 홈 앱엔 반영됨).
+#
+# Zigbee 동글이 없어 zigbee 어댑터는 "포트 열기 실패" 에러를 한 번 로깅하지만,
+# HAP 브리지 + MQTT 브로커는 정상 기동한다(각 컴포넌트가 독립 실행).
+
+homekit:
+  name: "Home Hub"
+  pin: "74329816"            # 아이폰에 입력할 8자리 코드 (743-29-816)
+  port: "51826"
+  storage: "./hap-data-demo" # 데모용 별도 저장소(실배포와 분리)
+
+zigbee:
+  port: ""                   # 동글 없음 — 무시됨(에러 로그 1회, 나머지는 정상)
+  storage: "./zigbee-data-demo"
+  permitJoin: false
+
+mqtt:
+  listen: ":1883"            # 내장 브로커 (가짜 ESP32가 여기 붙을 수 있음)
+
+devices:
+  # 안방 실링팬 — 조명(풀컬러) + 팬(6단·정역) 두 논리 기기.
+  - {id: bed_ceiling_light, name: "안방 실링팬 조명", integration: mqtt, addr: "home/bedroom/light", type: light, features: [brightness]}
+  - {id: bed_ceiling_fan,   name: "안방 실링팬 팬",   integration: mqtt, addr: "home/bedroom/fan",   type: fan,  features: [direction]}
+  # 무드등 (secondary light) — on/off만 (RGB 미지원).
+  - {id: bed_ceiling_mood,  name: "안방 무드등",       integration: mqtt, addr: "home/bedroom/mood",  type: light}
+
+rules: []                    # 벽 버튼(cycle)은 Zigbee라 동글 와야 실물 테스트.
