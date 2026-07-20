@@ -1,0 +1,10 @@
+# E 동글(ZBDongle-E) M0 검증용 최소 config — version 핸드셰이크만 확인.
+homekit: {name: "Home Hub", pin: "74329816", port: "51826", storage: "./hap-data-demo"}
+zigbee:
+  port: /dev/cu.usbserial-2110
+  backend: ezsp
+  storage: ""            # 개발 모드
+  permitJoin: false
+mqtt: {listen: ":1883"}
+devices: []
+rules: []

@@ -23,6 +23,7 @@ import (
 	"github.com/sh5080/home-hub/internal/mqtt"
 	"github.com/sh5080/home-hub/internal/registry"
 	"github.com/sh5080/home-hub/internal/zigbee"
+	"github.com/sh5080/home-hub/internal/zigbee/ezsp"
 )
 
 // runnable is anything with a blocking Start bound to a context.
@@ -96,11 +97,25 @@ func main() {
 	}
 
 	// Protocol adapters.
-	zb := zigbee.New(zigbee.Config{
-		Port:       cfg.Zigbee.Port,
-		Storage:    cfg.Zigbee.Storage,
-		PermitJoin: cfg.Zigbee.PermitJoin,
-	}, b, reg, log)
+	// Zigbee backend: zstack (P dongle, default) or ezsp (E dongle). Both
+	// implement driver.Driver and report integration "zigbee", so the rest of
+	// the wiring is identical.
+	var zb driver.Driver
+	switch cfg.Zigbee.Backend {
+	case "ezsp":
+		zb = ezsp.New(ezsp.Config{
+			Port:       cfg.Zigbee.Port,
+			Storage:    cfg.Zigbee.Storage,
+			PermitJoin: cfg.Zigbee.PermitJoin,
+		}, b, reg, log)
+		log.Info("zigbee backend: ezsp (ZBDongle-E)")
+	default:
+		zb = zigbee.New(zigbee.Config{
+			Port:       cfg.Zigbee.Port,
+			Storage:    cfg.Zigbee.Storage,
+			PermitJoin: cfg.Zigbee.PermitJoin,
+		}, b, reg, log)
+	}
 	mq := mqtt.New(cfg.MQTT.Listen, b, reg, log)
 	hk := homekit.New(homekit.Config{
 		Name:    cfg.HomeKit.Name,

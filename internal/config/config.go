@@ -34,6 +34,10 @@ type ZigbeeConfig struct {
 	Storage string `yaml:"storage"`
 	// PermitJoin opens the network for pairing. Enable only while pairing.
 	PermitJoin bool `yaml:"permitJoin"`
+	// Backend selects the coordinator stack: "zstack" (default — TI CC2652,
+	// Sonoff ZBDongle-P) or "ezsp" (Silicon Labs EmberZNet, Sonoff ZBDongle-E).
+	// The two dongles speak different protocols; set this to match the hardware.
+	Backend string `yaml:"backend,omitempty"`
 }
 
 // MQTTConfig configures the embedded MQTT broker.
