@@ -109,7 +109,7 @@ fan:
     ble_adv_controller_id: fanlamp
     id: fan_ble
     name: "안방 실링팬 팬"
-    speed_count: 6
+    speed_count: 3          # 진단: 이 팬이 BLE상 3단인지 확인 (6단이 안 먹혀서)
     use_direction: true
 
 button:
