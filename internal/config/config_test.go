@@ -98,6 +98,45 @@ func TestValidateDeviceRejects(t *testing.T) {
 	}
 }
 
+func TestValidateRFDevice(t *testing.T) {
+	ch := 0
+	fanButtons := &RFButtons{Off: 7, Speeds: map[int]int{33: 4, 66: 2, 100: 9}}
+	rfDev := func(typ domain.DeviceType, addr string, rf *RFDevice) *Config {
+		return &Config{Devices: []DeviceConfig{{
+			Device: domain.Device{ID: "d", Integration: domain.RF, Type: typ, Addr: addr},
+			RF:     rf,
+		}}}
+	}
+
+	valid := []*Config{
+		rfDev(domain.TypeCover, "rf447", &RFDevice{Channel: &ch}),
+		rfDev(domain.TypeFan, "rf447", &RFDevice{Buttons: fanButtons}),
+	}
+	for i, c := range valid {
+		if err := c.validate(); err != nil {
+			t.Errorf("valid rf config %d rejected: %v", i, err)
+		}
+	}
+
+	badCh := 16
+	invalid := map[string]*Config{
+		"missing addr":         rfDev(domain.TypeCover, "", &RFDevice{Channel: &ch}),
+		"multi-segment addr":   rfDev(domain.TypeCover, "home/rf447", &RFDevice{Channel: &ch}),
+		"cover without block":  rfDev(domain.TypeCover, "rf447", nil),
+		"cover channel range":  rfDev(domain.TypeCover, "rf447", &RFDevice{Channel: &badCh}),
+		"fan without buttons":  rfDev(domain.TypeFan, "rf447", &RFDevice{}),
+		"fan off out of range": rfDev(domain.TypeFan, "rf447", &RFDevice{Buttons: &RFButtons{Off: 0, Speeds: map[int]int{50: 1}}}),
+		"fan without speeds":   rfDev(domain.TypeFan, "rf447", &RFDevice{Buttons: &RFButtons{Off: 7}}),
+		"fan speed btn range":  rfDev(domain.TypeFan, "rf447", &RFDevice{Buttons: &RFButtons{Off: 7, Speeds: map[int]int{50: 16}}}),
+		"unsupported type":     rfDev(domain.TypeLight, "rf447", &RFDevice{Channel: &ch}),
+	}
+	for name, c := range invalid {
+		if err := c.validate(); err == nil {
+			t.Errorf("%s: expected validation error", name)
+		}
+	}
+}
+
 func TestLoadDuplicateID(t *testing.T) {
 	if _, err := Load(filepath.Join("testdata", "dup.yaml")); err == nil {
 		t.Fatal("expected error for duplicate device id")

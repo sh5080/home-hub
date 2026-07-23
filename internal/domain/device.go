@@ -20,6 +20,9 @@ const (
 	Zigbee Integration = "zigbee"
 	MQTT   Integration = "mqtt"
 	Matter Integration = "matter"
+	// RF devices sit behind an ESP32+CC1101 bridge that replays/generates the
+	// original remote's 447 MHz frames. Transmit-only: no state ever comes back.
+	RF Integration = "rf"
 )
 
 // Device is a logical device exposed by the hub, independent of protocol.

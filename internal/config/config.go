@@ -4,6 +4,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/sh5080/home-hub/internal/domain"
 	"gopkg.in/yaml.v3"
@@ -55,6 +56,26 @@ type DeviceConfig struct {
 	Triggers map[string]string `yaml:"triggers,omitempty"`
 	// Matter go-matter-only: how to reach the natively-controlled device.
 	GoMatter *GoMatterDevice `yaml:"gomatter,omitempty"`
+	// RF-only: how the device maps onto the ESP32+CC1101 bridge.
+	RF *RFDevice `yaml:"rf,omitempty"`
+}
+
+// RFDevice carries the bridge mapping of an RF device. addr names the bridge
+// (the firmware's DEVICE_ID, e.g. "rf447"); this block names the device's
+// slot on it.
+type RFDevice struct {
+	// Cover: which of the blind remote's channels this cover is (0..15).
+	Channel *int `yaml:"channel,omitempty"`
+	// Fan: which remote buttons do what. Button functions cannot be derived
+	// from the RF protocol — press them (serial `fan N` on the bridge) and
+	// record what happens.
+	Buttons *RFButtons `yaml:"buttons,omitempty"`
+}
+
+// RFButtons maps fan functions to remote button numbers (1..15).
+type RFButtons struct {
+	Off    int         `yaml:"off"`    // button that turns the fan off
+	Speeds map[int]int `yaml:"speeds"` // level percent -> button number
 }
 
 // GoMatterDevice locates a Matter device controlled natively by the hub.
@@ -154,6 +175,8 @@ func validateDevice(d DeviceConfig) error {
 			return fmt.Errorf("device %s: matter devices must be type cover, got %q", d.ID, d.Type)
 		}
 		return validateMatterDevice(d)
+	case domain.RF:
+		return validateRFDevice(d)
 	default:
 		return fmt.Errorf("device %s: unknown integration %q", d.ID, d.Integration)
 	}
@@ -178,6 +201,45 @@ func validateMatterDevice(d DeviceConfig) error {
 		}
 	default:
 		return fmt.Errorf("device %s: unknown matter driver %q", d.ID, d.Driver)
+	}
+	return nil
+}
+
+func validateRFDevice(d DeviceConfig) error {
+	// The bridge firmware parses its topics with a single-segment base, so the
+	// addr (= its DEVICE_ID) must not contain '/'.
+	if d.Addr == "" || strings.Contains(d.Addr, "/") {
+		return fmt.Errorf("device %s: rf addr must be the bridge id (single topic segment, e.g. %q)", d.ID, "rf447")
+	}
+	switch d.Type {
+	case domain.TypeCover:
+		if d.RF == nil || d.RF.Channel == nil {
+			return fmt.Errorf("device %s: rf cover requires rf.channel", d.ID)
+		}
+		if ch := *d.RF.Channel; ch < 0 || ch > 15 {
+			return fmt.Errorf("device %s: rf.channel %d out of range [0,15]", d.ID, ch)
+		}
+	case domain.TypeFan:
+		if d.RF == nil || d.RF.Buttons == nil {
+			return fmt.Errorf("device %s: rf fan requires rf.buttons", d.ID)
+		}
+		b := d.RF.Buttons
+		if b.Off < 1 || b.Off > 15 {
+			return fmt.Errorf("device %s: rf.buttons.off %d out of range [1,15]", d.ID, b.Off)
+		}
+		if len(b.Speeds) == 0 {
+			return fmt.Errorf("device %s: rf.buttons.speeds needs at least one level", d.ID)
+		}
+		for lvl, btn := range b.Speeds {
+			if lvl < 1 || lvl > 100 {
+				return fmt.Errorf("device %s: rf speed level %d out of range [1,100]", d.ID, lvl)
+			}
+			if btn < 1 || btn > 15 {
+				return fmt.Errorf("device %s: rf speed button %d out of range [1,15]", d.ID, btn)
+			}
+		}
+	default:
+		return fmt.Errorf("device %s: rf devices must be type fan or cover, got %q", d.ID, d.Type)
 	}
 	return nil
 }
