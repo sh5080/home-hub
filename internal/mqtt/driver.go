@@ -72,6 +72,12 @@ func New(listen string, b *bus.Bus, reg *registry.Registry, log *slog.Logger) *D
 // Name identifies the adapter.
 func (d *Driver) Name() string { return "mqtt" }
 
+// Publish sends a message through the embedded broker on behalf of a
+// co-resident adapter (e.g. rf) whose devices are connected to it.
+func (d *Driver) Publish(topic string, payload []byte, retain bool) error {
+	return d.server.Publish(topic, payload, retain, 0)
+}
+
 // topicBase is the device's MQTT topic prefix: its configured addr, or
 // "home/<id>" when addr is empty. State arrives on "<base>/state" and commands
 // go to "<base>/set".
