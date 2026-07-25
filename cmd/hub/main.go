@@ -22,6 +22,7 @@ import (
 	"github.com/sh5080/home-hub/internal/matter"
 	"github.com/sh5080/home-hub/internal/mqtt"
 	"github.com/sh5080/home-hub/internal/registry"
+	"github.com/sh5080/home-hub/internal/rf"
 	"github.com/sh5080/home-hub/internal/zigbee"
 	"github.com/sh5080/home-hub/internal/zigbee/ezsp"
 )
@@ -117,6 +118,25 @@ func main() {
 		}, b, reg, log)
 	}
 	mq := mqtt.New(cfg.MQTT.Listen, b, reg, log)
+	// RF devices transmit through the ESP32+CC1101 bridge, which is an MQTT
+	// client of the embedded broker — the rf adapter publishes through mq.
+	var rfDevs []rf.Device
+	for _, dc := range cfg.Devices {
+		if dc.Integration != domain.RF {
+			continue
+		}
+		dev := rf.Device{ID: dc.ID, Type: dc.Type, Base: dc.Addr}
+		if dc.RF != nil {
+			if dc.RF.Channel != nil {
+				dev.Channel = *dc.RF.Channel
+			}
+			if dc.RF.Buttons != nil {
+				dev.Buttons = rf.FanButtons{Off: dc.RF.Buttons.Off, Speeds: dc.RF.Buttons.Speeds}
+			}
+		}
+		rfDevs = append(rfDevs, dev)
+	}
+	rfd := rf.New(rfDevs, mq, b, log)
 	hk := homekit.New(homekit.Config{
 		Name:    cfg.HomeKit.Name,
 		Pin:     cfg.HomeKit.Pin,
@@ -155,6 +175,7 @@ func main() {
 	owners := map[domain.Integration]driver.Driver{
 		domain.Zigbee: zb,
 		domain.MQTT:   mq,
+		domain.RF:     rfd,
 	}
 	owner := func(id string) driver.Driver {
 		d, ok := reg.Get(id)
@@ -234,7 +255,7 @@ func main() {
 
 	// Start long-running components.
 	var wg sync.WaitGroup
-	for _, r := range []runnable{zb, mq, hk, auto, hz, matterPoller} {
+	for _, r := range []runnable{zb, mq, rfd, hk, auto, hz, matterPoller} {
 		wg.Add(1)
 		go func(r runnable) {
 			defer wg.Done()

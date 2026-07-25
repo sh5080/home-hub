@@ -39,6 +39,32 @@ devices:
   - {id: humidity_1,     name: "Humidity",     integration: mqtt, addr: "home/humidity_1",     type: humidity}
   - {id: dehumidifier_1, name: "Dehumidifier", integration: mqtt, addr: "home/dehumidifier_1", type: switch}
 
+  # Devices behind the ESP32+CC1101 447 MHz RF bridge (rf-remote-analyzer's
+  # rf_bridge firmware, flashed with MQTT_HOST = this hub). addr is the
+  # firmware's DEVICE_ID. Transmit-only: state shown in HomeKit is optimistic.
+  # See docs/rf-bridge.md.
+  - id: living_ceiling_fan
+    name: "거실 실링팬"
+    integration: rf
+    type: fan
+    addr: rf447
+    rf:
+      # Remote layout (verified on hardware): 1-6 speed, 7 all-off,
+      # 8 rotation-off, 9 LED (this fan has no light), 10 forward,
+      # 11 natural breeze, 12 reverse, 13-15 timer 1H/2H/4H.
+      buttons:
+        off: 7
+        # Six speeds spread over the HomeKit 0-100 slider; a level snaps to
+        # the nearest one.
+        speeds: {17: 1, 33: 2, 50: 3, 67: 4, 83: 5, 100: 6}
+  - id: bedroom_blind
+    name: "안방 블라인드"
+    integration: rf
+    type: cover
+    addr: rf447
+    rf:
+      channel: 0              # which of the blind remote's 16 channels
+
   # Matter blind, natively controlled by the hub over CASE (go-matter).
   # Commission the device onto the hub's fabric first (e.g. with chip-tool),
   # then point fabricStore at the stored credentials. Omitting address resolves
