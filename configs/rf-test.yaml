@@ -1,0 +1,49 @@
+# RF 브리지 실기 검증용 설정 — 거실 실링팬 + 안방 블라인드만.
+#
+# 실행:  go run ./cmd/hub --config configs/rf-test.yaml
+#
+# ESP32+CC1101 브리지(esp32/rf_bridge)가 이 허브의 내장 MQTT 브로커에 붙어
+# 447MHz 전파를 쏜다. 브리지의 secrets.h MQTT_HOST가 이 허브의 IP여야 한다.
+# 자세한 내용은 docs/rf-bridge.md.
+#
+# Zigbee 동글이 없어 zigbee 어댑터만 에러를 한 번 로깅하고, HAP 브리지 +
+# MQTT 브로커 + RF 어댑터는 정상 기동한다(컴포넌트가 독립 실행).
+
+homekit:
+  name: "Home Hub RF"
+  pin: "74329816"            # 아이폰에 입력할 8자리 코드 (743-29-816)
+  port: "51827"              # mac-demo와 다른 포트 (동시 실행 가능)
+  storage: "./hap-data-rf"
+
+zigbee:
+  port: ""                   # 동글 없음 — 무시됨
+  storage: "./zigbee-data-rf"
+  permitJoin: false
+
+mqtt:
+  listen: ":1883"            # 브리지가 붙는 브로커
+
+devices:
+  # 거실 로슬러 실링팬 — 실측 확인: 1~6 풍속, 7 전체종료, 9 LED(조명 없어 무동작),
+  # 10 정방향, 11 자연풍, 12 역방향, 13~15 타이머 1H/2H/4H.
+  - id: living_ceiling_fan
+    name: "거실 실링팬"
+    integration: rf
+    type: fan
+    addr: rf447
+    rf:
+      buttons:
+        off: 7
+        speeds: {17: 1, 33: 2, 50: 3, 67: 4, 83: 5, 100: 6}
+
+  # 안방 전동블라인드 — 채널은 미확인. 코드북에 ch0~3이 있으니 하나씩 시험해
+  # 반응하는 채널로 바꿀 것.
+  - id: bedroom_blind
+    name: "안방 블라인드"
+    integration: rf
+    type: cover
+    addr: rf447
+    rf:
+      channel: 0
+
+rules: []

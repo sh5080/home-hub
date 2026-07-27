@@ -11,7 +11,8 @@
 | Aqara H2 조명 5개 | 거실2·주방·안방·작업방 | Zigbee | **Zigbee 동글** | Lightbulb | 코드완료 · 동글 필요 |
 | 안방 조명실링팬 | 안방 | **BLE**(FanLamp Pro)→ESP32→MQTT | **ESP32 #1** | Light + Fan | 코드완료 · ESP32+variant |
 | 벽 L2/L3 (안방) | 안방 | Zigbee decoupled → 규칙 → MQTT | (H2) | — | **cycle 규칙 구현 필요** |
-| 거실 로슬러 실링팬 | 거실 | **RF**→ESP32→MQTT | **ESP32 #2 + RF모듈** | Fan (+조명?) | RF 캡처+예제 필요 |
+| 거실 로슬러 실링팬 | 거실 | **RF 447M**→ESP32→MQTT | **ESP32 #2 + CC1101** | Fan | **허브 코드완료**(`internal/rf`) · 버튼 기능 식별 필요 — `docs/rf-bridge.md` |
+| 안방 전동블라인드 | 안방 | **RF 447M**→ESP32→MQTT | ESP32 #2 + CC1101 (공용) | Cover | **허브 코드완료** · 채널 확인 필요 — `docs/rf-bridge.md` |
 | 거실 무빙쇼파 | 거실 | **RF**→ESP32→MQTT | ESP32 #2 + RF모듈 | 스위치/커버(확인) | RF 캡처+모델링 |
 | 삼성 에어컨 ×2 | — | **SmartThings** 클라우드 | **`internal/smartthings`(신규)** | HeaterCooler | **결정: 어댑터 구축, AC 먼저** |
 | 삼성 가전(세탁·건조·식세·냉장×2·청소) | 집 전체 | SmartThings | (추후 ST 어댑터 확장) | 제한적 | **추후** (지금은 ST 앱) |
@@ -22,8 +23,9 @@
 
 1. **Zigbee 코디네이터 동글 ×1** — CC2652(예: Sonoff ZBDongle-P). 조명 전체의 전제.
 2. **ESP32-WROOM-32 ×2** — #1 안방(BLE 전용, 모듈 없음), #2 거실(RF).
-3. **433MHz RF 송신+수신 모듈 1세트** — 거실 ESP32용. 리모컨 라벨이 없어 주파수 미상 →
-   **433 우선**, RX로 안 잡히면 315MHz. 정 애매하면 CC1101(가변).
+3. **CC1101 모듈 (433MHz 표기, 387–464MHz 가변)** — 거실 ESP32용. SDR 분석 결과
+   로슬러 팬 447.887 MHz / 안방 블라인드 447.7234 MHz로 확정 → **고정형 STX882/SRX882로는
+   불가**, CC1101 필수. (STX882 세트는 무빙쇼파가 433대면 그때 사용.)
 4. **Apple TV 4K** — 이미 보유. 구매 아님, 설정만.
 
 > 안방 BLE는 ESP32 내장 라디오라 **RF 모듈 불필요**. RF 모듈은 **거실(로슬러 팬 + 쇼파)** 에만.
