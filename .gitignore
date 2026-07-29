@@ -15,6 +15,10 @@ go.work.sum
 # Local config / secrets
 *.local.yaml
 .env
+# 실제 HAP pin이 든 운영 설정 — configs/pi.yaml.example만 커밋한다
+/configs/pi.yaml
+# 배포 대상 호스트/키 경로 (make deploy가 include)
+/deploy/local.mk
 
 # HAP pairing/state store
 /hap-data/

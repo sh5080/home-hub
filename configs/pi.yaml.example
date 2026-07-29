@@ -1,0 +1,53 @@
+# 라즈베리파이 상시 운영 설정 — 템플릿 (Pi 3B, 32bit Bookworm).
+#
+#   cp configs/pi.yaml.example configs/pi.yaml   # pin을 실제 값으로 교체
+#
+# configs/pi.yaml은 git 제외다. HAP pin은 이 브리지와 페어링할 수 있는
+# 자격증명이라 공개 레포에 올리지 않는다.
+#
+# 배포:  GOOS=linux GOARCH=arm GOARM=7 CGO_ENABLED=0 go build -trimpath \
+#          -ldflags="-s -w" -o hub-armv7 ./cmd/hub
+#        scp hub-armv7 configs/pi.yaml pi:/var/lib/homehub/...
+#        systemctl start homehub    (유닛은 deploy/homehub.service)
+#
+# Mac의 rf-test.yaml과 달리 경로가 전부 절대경로다 — systemd가 어느 디렉터리에서
+# 띄우든 같은 상태 파일을 쓰게 하려는 것. HAP 페어링 정보가 여기 쌓이므로
+# 이 디렉터리를 지우면 아이폰에서 재페어링해야 한다.
+
+homekit:
+  name: "Home Hub"
+  pin: "00102003"                       # 실제 값으로 바꿀 것 — 커밋 금지
+  port: "51826"                         # ufw 기본 허용 포트
+  storage: "/var/lib/homehub/hap-data"
+
+zigbee:
+  port: ""                              # 동글 미장착 — 어댑터가 에러 한 번 남기고 나머지는 정상 기동
+  storage: "/var/lib/homehub/zigbee-data"
+  permitJoin: false
+
+mqtt:
+  listen: ":1883"                       # ESP32 rf_bridge가 붙는 내장 브로커
+
+devices:
+  # 거실 로슬러 실링팬 — 실측: 1~6 풍속, 7 전체종료, 9 LED(조명 없어 무동작),
+  # 10 정방향, 11 자연풍, 12 역방향, 13~15 타이머 1H/2H/4H.
+  - id: living_ceiling_fan
+    name: "거실 실링팬"
+    integration: rf
+    type: fan
+    addr: rf447
+    rf:
+      buttons:
+        off: 7
+        speeds: {17: 1, 33: 2, 50: 3, 67: 4, 83: 5, 100: 6}
+
+  # 안방 전동블라인드 — 채널 미확인. rf447/blind/<0..3>/set 로 반응 채널 찾을 것.
+  - id: bedroom_blind
+    name: "안방 블라인드"
+    integration: rf
+    type: cover
+    addr: rf447
+    rf:
+      channel: 0
+
+rules: []

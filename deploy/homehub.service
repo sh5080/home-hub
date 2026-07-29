@@ -1,0 +1,46 @@
+# home-hub 상시 구동 유닛 (Raspberry Pi, bare systemd — Docker 안 씀).
+#
+# 설치:
+#   sudo cp deploy/homehub.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now homehub
+# 로그:
+#   journalctl -u homehub -f
+#
+# 바이너리 갱신은 Mac에서 크로스컴파일 후 scp — Pi에서 빌드하지 않는다
+# (1GB RAM에서 Go 빌드는 스왑을 때려 SD 수명을 깎는다).
+
+[Unit]
+Description=home-hub (HomeKit / MQTT / RF bridge)
+Documentation=https://github.com/sh5080/home-hub
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=sh5080
+Group=sh5080
+WorkingDirectory=/var/lib/homehub
+ExecStart=/var/lib/homehub/bin/hub --config /var/lib/homehub/configs/pi.yaml
+
+# 죽으면 항상 되살린다. 부팅 직후 네트워크가 덜 올라와 실패해도 재시도로 흡수.
+Restart=always
+RestartSec=5s
+
+# 메모리 가드(MemoryHigh/MemoryMax)는 두지 않는다. 라즈베리파이 OS는 memory
+# cgroup 컨트롤러가 기본 비활성(/sys/fs/cgroup/.../memory.max 부재)이라 조용히
+# 무시된다. 필요해지면 /boot/firmware/cmdline.txt에 cgroup_enable=memory
+# cgroup_memory=1 을 추가하고 재부팅할 것. 실사용량은 30MB 안팎이라 현재 불필요.
+
+# 로그는 journald로 (journald.conf.d/size.conf에서 50M 상한 — SD 수명 보호).
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=homehub
+
+NoNewPrivileges=yes
+ProtectSystem=full
+ProtectHome=yes
+ReadWritePaths=/var/lib/homehub
+# PrivateDevices는 켜지 않는다 — 이후 Zigbee 동글(/dev/ttyUSB*, dialout 그룹) 접근이 필요.
+
+[Install]
+WantedBy=multi-user.target
