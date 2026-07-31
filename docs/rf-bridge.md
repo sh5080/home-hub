@@ -44,7 +44,7 @@ home-hub (Go)  ── internal/rf ──▶ 내장 MQTT 브로커 (mochi-mqtt, :
 | 코드북이 **우리 집** 리모컨 것인가 | ✅ 실물 리모컨 수신 캡처의 주소 `10101000100111011001`가 `kFanAddress`와 일치, 패리티 4식도 성립 |
 | 브리지 송신 → 팬 반응 | ✅ 정지 상태에서 `fan 1`로 기동, `fan 7`로 정지 |
 | 누름 카운터 동작 | ✅ 같은 버튼 4회(카운터 4·5·6·7)가 **각각 개별 누름**으로 인식됨 |
-| WiFi + 허브 MQTT 연결 | ✅ ESP32 192.168.0.112 → 허브 192.168.0.107:1883 |
+| WiFi + 허브 MQTT 연결 | ✅ ESP32 → 허브 MQTT (당시 Mac). 이후 Pi로 이전 — 아래 참고 |
 
 ### 거실 실링팬 버튼 맵 (물리 순서 = 코드북 번호)
 
@@ -60,7 +60,9 @@ home-hub (Go)  ── internal/rf ──▶ 내장 MQTT 브로커 (mochi-mqtt, :
 
 ## 허브 config
 
-`configs/rf-test.yaml`이 실기 검증용 최소 설정이다(RF 기기 2개만).
+`configs/rf-test.yaml`이 Mac 개발용 최소 설정이다(RF 기기 2개만).
+**상시 운영은 라즈베리파이의 `configs/pi.yaml` + `deploy/homehub.service`** —
+절차는 `docs/pi-deploy.md`.
 
 ```yaml
 devices:
@@ -113,6 +115,7 @@ arduino-cli upload  --fqbn esp32:esp32:esp32 -p /dev/cu.usbserial-10 esp32/rf_br
 
 ## 셋업/디버깅 순서
 
+0. 운영 환경(Pi)은 `homehub.service`로 이미 떠 있다 — 아래 1번은 Mac 개발용.
 1. 허브 실행: `go run ./cmd/hub --config configs/rf-test.yaml`
 2. 브리지 연결 확인 (리셋 없이): `netstat -an | grep 1883.*ESTABLISHED`
    → ESP32 IP가 보이면 붙은 것.
