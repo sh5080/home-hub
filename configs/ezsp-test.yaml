@@ -1,10 +1,19 @@
-# E 동글(ZBDongle-E) M0 검증용 최소 config — version 핸드셰이크만 확인.
-homekit: {name: "Home Hub", pin: "74329816", port: "51826", storage: "./hap-data-demo"}
+# E 동글(ZBDongle-E) EZSP 백엔드 개발용 config.
+#
+#   go run ./cmd/hub --config configs/ezsp-test.yaml
+#
+# ⚠️ 운영 중인 Pi 브리지와 이름·포트·PIN을 일부러 다르게 뒀다. 같으면 Home 앱에서
+# 두 브리지가 충돌한다. 이 설정은 Mac에서 동글을 꽂고 돌리는 개발 전용이다.
+homekit:
+  name: "Home Hub Dev"
+  pin: "01120333"          # 개발용. 운영 PIN을 재사용하지 말 것
+  port: "51828"
+  storage: "./hap-data-demo"
 zigbee:
-  port: /dev/cu.usbserial-2110
+  port: /dev/cu.usbserial-2140    # ZBDongle-E (Itead). ls /dev/cu.usbserial-* 로 확인
   backend: ezsp
-  storage: ""            # 개발 모드
+  storage: ""                     # 개발 모드 — 아직 영속화 없음(M2)
   permitJoin: false
-mqtt: {listen: ":1883"}
+mqtt: {listen: ":1884"}           # 운영과 헷갈리지 않게 개발은 1884
 devices: []
 rules: []
