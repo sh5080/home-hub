@@ -90,8 +90,19 @@ ufw active, SSH 키 인증. SD 수명 보호용이라 유지할 것.
 
 ## 알아둘 것
 
-- **Pi IP가 바뀌면 ESP32가 조용히 죽는다.** 펌웨어에 IP가 하드코딩이라
-  공유기에서 Pi의 eth0 MAC에 **DHCP 고정 할당**을 걸어두는 것이 필수다.
+- **Pi IP가 바뀌면 ESP32가 조용히 죽는다.** 펌웨어에 허브 IP가 하드코딩이라, 에러 없이
+  팬만 안 먹는 형태로 고장난다. 그래서 Pi는 **NetworkManager 고정 IP**를 쓴다:
+
+  ```bash
+  sudo nmcli con mod "Wired connection 1" ipv4.method manual \
+    ipv4.addresses 192.168.0.x/24 ipv4.gateway 192.168.0.1 ipv4.dns 192.168.0.1
+  sudo nmcli con up "Wired connection 1"     # 주소가 바뀌므로 SSH가 끊긴다(정상)
+  ```
+
+  주소는 **공유기 DHCP 풀 바깥**에서 고른다(TP-Link 기본 풀은 `.100~.199`이므로 `.50`대).
+  풀 안쪽에 고정 IP를 박으면 공유기가 같은 주소를 다른 기기에 내줄 여지가 남는다.
+  고르기 전에 `ping`으로 비어 있는지 확인할 것. 공유기에서 DHCP 예약을 거는 방법도
+  동등하게 유효하다 — 그쪽을 쓰면 Pi는 DHCP 그대로 두면 된다.
 - **메모리 cgroup 컨트롤러가 꺼져 있다.** 유닛에 `MemoryMax`를 써도 무시된다
   (`deploy/homehub.service` 주석 참고). 실사용 30MB 안팎이라 지금은 문제없음.
 - **Zigbee 동글은 Pi USB에 물리적으로 꽂혀 있어야 한다**(허브가 시리얼을 직접 연다).

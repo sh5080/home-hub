@@ -18,12 +18,19 @@ import (
 // could not parse, and failing fast is more useful than hanging the adapter.
 const requestTimeout = 5 * time.Second
 
+// networkUpTimeout bounds how long we wait for the stack to report the network
+// up after formNetwork is accepted. Forming involves an energy scan, so it is
+// far slower than a command round trip.
+const networkUpTimeout = 30 * time.Second
+
 // Config configures the EZSP ("E" dongle) Zigbee backend. It mirrors the
 // zstack backend's config so the two are interchangeable via config selection.
 type Config struct {
 	Port       string
 	Storage    string // network/key persistence (network form on first run)
 	PermitJoin bool
+	Channel    uint8 // 802.15.4 channel for a NEW network; 0 = default
+	TxPower    uint8 // coordinator radio power in dBm; 0 = default
 }
 
 // pending is the in-flight command awaiting its response. EZSP multiplexes
@@ -59,11 +66,16 @@ type Driver struct {
 
 	mu      sync.Mutex
 	pending *pending
+
+	// stackStatus carries EMBER_NETWORK_UP/DOWN from the NCP's unsolicited
+	// stackStatusHandler. Buffered so a status arriving while nobody waits —
+	// the usual case once the network is up — is not lost mid-callback.
+	stackStatus chan uint8
 }
 
 // New builds an EZSP Zigbee driver.
 func New(cfg Config, b *bus.Bus, reg *registry.Registry, log *slog.Logger) *Driver {
-	return &Driver{cfg: cfg, bus: b, reg: reg, log: log}
+	return &Driver{cfg: cfg, bus: b, reg: reg, log: log, stackStatus: make(chan uint8, 4)}
 }
 
 // Name identifies the adapter. It reports "zigbee" so command routing (which
@@ -106,23 +118,20 @@ func (d *Driver) Start(ctx context.Context) error {
 	errc := make(chan error, 1)
 	go func() { errc <- d.readLoop(ctx) }()
 
-	state, err := d.GetNetworkParameters(ctx)
+	state, err := d.bringUpNetwork(ctx)
 	if err != nil {
-		return fmt.Errorf("ezsp getNetworkParameters: %w", err)
+		return fmt.Errorf("ezsp network bring-up: %w", err)
 	}
-	if state.Joined() {
-		d.log.Info("ezsp network up",
-			"nodeType", NodeTypeName(state.NodeType),
-			"panId", fmt.Sprintf("%#04x", state.Params.PanID),
-			"channel", state.Params.RadioChannel,
-			"txPower", state.Params.RadioTxPower)
-	} else {
-		d.log.Info("ezsp NCP holds no network yet",
-			"status", fmt.Sprintf("%#02x", state.Status),
-			"next", "M2 will form one (setInitialSecurityState + formNetwork)")
+	if !state.Joined() {
+		return fmt.Errorf("ezsp: network still not up after forming (status %s)", StatusName(state.Status))
 	}
+	d.log.Info("ezsp network up",
+		"nodeType", NodeTypeName(state.NodeType),
+		"panId", fmt.Sprintf("%#04x", state.Params.PanID),
+		"channel", state.Params.RadioChannel,
+		"txPower", state.Params.RadioTxPower)
 
-	d.log.Warn("ezsp backend is M1 (frames + demux); network forming and ZCL not yet implemented")
+	d.log.Warn("ezsp backend is M2 (network up); joining and ZCL not yet implemented")
 	select {
 	case err := <-errc:
 		return err
@@ -230,7 +239,11 @@ func (d *Driver) handleCallback(f Frame) {
 	switch f.ID {
 	case IDStackStatusHandler:
 		if len(f.Params) > 0 {
-			d.log.Info("ezsp stack status", "status", fmt.Sprintf("%#02x", f.Params[0]))
+			d.log.Info("ezsp stack status", "status", StatusName(f.Params[0]))
+			select {
+			case d.stackStatus <- f.Params[0]:
+			default: // nobody waiting and the buffer is full; the log has it
+			}
 			return
 		}
 	case IDTrustCenterJoinHandler:

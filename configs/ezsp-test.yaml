@@ -12,8 +12,12 @@ homekit:
 zigbee:
   port: /dev/cu.usbserial-2140    # ZBDongle-E (Itead). ls /dev/cu.usbserial-* 로 확인
   backend: ezsp
-  storage: ""                     # 개발 모드 — 아직 영속화 없음(M2)
+  storage: "./zigbee-data-demo"   # 네트워크 키 기록(0600). git 제외 경로
   permitJoin: false
+  # 새 네트워크를 만들 때만 쓰는 채널. 집 WiFi를 실측하고 고를 것 —
+  # 2026-09 조사: 우리 WiFi ch10(2447~2467MHz), 옆집 ch2 40MHz(~2397~2437MHz)
+  # → Zigbee 15(2425)·20(2450)은 충돌, 25(2475)가 유일하게 깨끗했다.
+  channel: 25
 mqtt: {listen: ":1884"}           # 운영과 헷갈리지 않게 개발은 1884
 devices: []
 rules: []

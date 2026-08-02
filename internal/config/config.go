@@ -39,6 +39,15 @@ type ZigbeeConfig struct {
 	// Sonoff ZBDongle-P) or "ezsp" (Silicon Labs EmberZNet, Sonoff ZBDongle-E).
 	// The two dongles speak different protocols; set this to match the hardware.
 	Backend string `yaml:"backend,omitempty"`
+	// Channel is the 802.15.4 channel (11-26) to form a NEW network on. It is
+	// read only at formation; an existing network keeps the channel stored in
+	// the dongle. Pick one clear of the 2.4 GHz Wi-Fi in use — Zigbee 15/20/25
+	// are the usual candidates, and which is actually clear depends on the
+	// local Wi-Fi channels, so survey before choosing. 0 uses the default.
+	Channel uint8 `yaml:"channel,omitempty"`
+	// TxPower is the coordinator's radio transmit power in dBm at formation.
+	// 0 uses the default; raising it does not help if the far end is weak.
+	TxPower uint8 `yaml:"txPower,omitempty"`
 }
 
 // MQTTConfig configures the embedded MQTT broker.

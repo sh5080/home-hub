@@ -34,8 +34,29 @@ internal/zigbee/ezsp/
   - **ZBDongle-E 실측: `getNetworkParameters`가 v13 확장 포맷으로 왕복, status=0x93
     (`EMBER_NOT_JOINED` — 공장 초기 상태).** 인코딩이 틀렸다면 응답 자체가 없었을 것이므로,
     이 왕복이 프레임 레이아웃 전체에 대한 증거다.
-- **M2** — 네트워크: `networkInit` → (없으면 `formNetwork`, 네트워크키 영속화) →
-  `getNetworkParameters`. 어댑터 엔드포인트 + 클러스터 등록.
+- **M2 ✅ (실HW 검증 완료)** — 코디네이터 네트워크 기동.
+  - **순서가 자유롭지 않다**: `addEndpoint`는 스택이 뜨기 **전에만** 받아들여지므로
+    `networkInit`보다 먼저 호출한다. 애플리케이션 설정처럼 읽히지만 순서 제약이 있다.
+  - `networkInit`(v8+는 `EmberNetworkInitBitmask` 2바이트를 받는다 — v4의 무인자
+    `networkInit`/별도 `networkInitExtended` 구도가 아니다) → `getNetworkParameters`로
+    상태 확인 → 없으면 `setInitialSecurityState` + `formNetwork`.
+  - 보안 프로파일은 zigbee-herdsman Ember 어댑터와 동일하게 맞췄다(z2m으로 페어링되는
+    기기는 우리와도 페어링된다): 해시된 TC 글로벌 링크키(`ZigBeeAlliance09`) +
+    랜덤 네트워크키 + **REQUIRE_ENCRYPTED_KEY**(네트워크키를 평문으로 안 뿌림).
+  - `formNetwork`는 요청 수락 시점에 반환한다. 실제 사용 가능 시점은 비동기
+    `stackStatusHandler`의 **NETWORK_UP**이므로 그것을 기다린다 — M1 디먹스가 여기서 처음
+    실전에 쓰인다.
+  - 네트워크키는 `<storage>/network.json`(0600)에 기록한다. **권위 있는 사본은 동글
+    플래시**이고 이 파일은 동글 분실 대비 기록이다.
+  - **채널은 실측으로 고른다.** 802.15.4와 2.4GHz WiFi는 같은 대역을 쓴다.
+    2026-09 조사: 집 WiFi ch10(2447~2467MHz), 옆집 ch2 40MHz(~2397~2437MHz)
+    → Zigbee 15(2425)·20(2450)은 충돌, **25(2475)가 유일하게 깨끗** → `zigbee.channel: 25`.
+  - **실측: 1회차 form → NETWORK_UP → panId 0x8d76 / ch25 / coordinator. 2회차는 재form
+    없이 `networkInit`만으로 같은 네트워크 재개** (= 영속성 확인).
+- **M2.5(다음)** — `setPolicy(TRUST_CENTER_POLICY)`. ⚠️ v8+에서 결정값이
+  `EzspDecisionId`(1바이트)에서 **`EzspDecisionBitmask`(2바이트)**로 바뀌었다. 조인 정책은
+  M3에서 다루므로 M2에서는 일부러 건드리지 않았다. `setExtendedSecurityBitmask`
+  (JOINER_GLOBAL_LINK_KEY)도 여기서 같이.
 - **M3** — `permitJoining(cfg.PermitJoin)` + `trustCenterJoinHandler`(조인 감지) →
   Aqara decoupled 설정(zstack 드라이버 로직 재사용).
 - **M4** — `Apply`: `sendUnicast`로 ZCL on/off + Window Covering 송신.

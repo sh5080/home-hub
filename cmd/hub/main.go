@@ -108,6 +108,8 @@ func main() {
 			Port:       cfg.Zigbee.Port,
 			Storage:    cfg.Zigbee.Storage,
 			PermitJoin: cfg.Zigbee.PermitJoin,
+			Channel:    cfg.Zigbee.Channel,
+			TxPower:    cfg.Zigbee.TxPower,
 		}, b, reg, log)
 		log.Info("zigbee backend: ezsp (ZBDongle-E)")
 	default:

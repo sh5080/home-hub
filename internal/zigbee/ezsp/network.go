@@ -84,3 +84,105 @@ func NodeTypeName(t uint8) string {
 	}
 	return fmt.Sprintf("%#02x", t)
 }
+
+// ---------------------------------------------------------------------------
+// M2: bringing the coordinator's network up.
+// ---------------------------------------------------------------------------
+
+// EmberStatus values seen during network bring-up.
+const (
+	StatusNetworkUp   = 0x90
+	StatusNetworkDown = 0x91
+)
+
+// EmberInitialSecurityBitmask flags used when forming.
+const (
+	SecTrustCenterGlobalLinkKey = 0x0004
+	SecTrustCenterHashedLinkKey = 0x0084 // implies the global-link-key bit
+	SecHavePreconfiguredKey     = 0x0100
+	SecHaveNetworkKey           = 0x0200
+	SecRequireEncryptedKey      = 0x0800
+)
+
+// formSecurityBitmask is the Zigbee 3.0 coordinator profile: a global trust
+// centre link key (hashed), a network key we supply, and the network key handed
+// to joiners encrypted rather than in the clear. Mirrors what zigbee-herdsman's
+// Ember adapter forms with, so devices that pair with zigbee2mqtt pair with us.
+const formSecurityBitmask = SecTrustCenterHashedLinkKey |
+	SecHavePreconfiguredKey | SecHaveNetworkKey | SecRequireEncryptedKey
+
+// TCLinkKey is the well-known "ZigBeeAlliance09" trust-centre link key that
+// Zigbee 3.0 devices use to join before receiving the real network key.
+var TCLinkKey = [16]byte{
+	'Z', 'i', 'g', 'B', 'e', 'e', 'A', 'l', 'l', 'i', 'a', 'n', 'c', 'e', '0', '9',
+}
+
+// EmberJoinMethod: how a node joins. Coordinators form with MAC association.
+const JoinMethodMACAssociation = 0x00
+
+// AllChannelsMask is the 2.4 GHz 802.15.4 channel mask (channels 11-26). The
+// network manager may move the network within this set; radioChannel is where
+// it actually starts.
+const AllChannelsMask uint32 = 0x07FFF800
+
+// NetworkInitNoOptions is EmberNetworkInitBitmask with nothing set: resume a
+// stored network as-is.
+const NetworkInitNoOptions uint16 = 0x0000
+
+// EncodeInitialSecurityState serialises EmberInitialSecurityState:
+// [bitmask u16][preconfiguredKey 16][networkKey 16][keySeqNum u8][tcEui64 8].
+// preconfiguredTrustCenterEui64 is left blank: we are the trust centre, so
+// there is no other one to pin.
+func EncodeInitialSecurityState(bitmask uint16, preconfiguredKey, networkKey [16]byte, keySeq uint8) []byte {
+	b := make([]byte, 0, 43)
+	b = binary.LittleEndian.AppendUint16(b, bitmask)
+	b = append(b, preconfiguredKey[:]...)
+	b = append(b, networkKey[:]...)
+	b = append(b, keySeq)
+	return append(b, make([]byte, 8)...) // blank trust-centre EUI64
+}
+
+// EncodeNetworkParameters serialises EmberNetworkParameters for formNetwork.
+// The field order matches DecodeNetworkParameters.
+func EncodeNetworkParameters(p NetworkParameters) []byte {
+	b := make([]byte, 0, netParamsLen)
+	b = append(b, p.ExtendedPanID[:]...)
+	b = binary.LittleEndian.AppendUint16(b, p.PanID)
+	b = append(b, p.RadioTxPower, p.RadioChannel, p.JoinMethod)
+	b = binary.LittleEndian.AppendUint16(b, p.NwkManagerID)
+	b = append(b, p.NwkUpdateID)
+	return binary.LittleEndian.AppendUint32(b, p.Channels)
+}
+
+// EncodeAddEndpoint serialises addEndpoint:
+// [endpoint][profileId u16][deviceId u16][deviceVersion][inCount][outCount]
+// [inClusters u16...][outClusters u16...].
+func EncodeAddEndpoint(endpoint uint8, profileID, deviceID uint16, version uint8, in, out []uint16) []byte {
+	b := make([]byte, 0, 9+2*(len(in)+len(out)))
+	b = append(b, endpoint)
+	b = binary.LittleEndian.AppendUint16(b, profileID)
+	b = binary.LittleEndian.AppendUint16(b, deviceID)
+	b = append(b, version, uint8(len(in)), uint8(len(out)))
+	for _, c := range in {
+		b = binary.LittleEndian.AppendUint16(b, c)
+	}
+	for _, c := range out {
+		b = binary.LittleEndian.AppendUint16(b, c)
+	}
+	return b
+}
+
+// StatusName renders an EmberStatus for logs.
+func StatusName(s uint8) string {
+	switch s {
+	case StatusSuccess:
+		return "SUCCESS"
+	case StatusNotJoined:
+		return "NOT_JOINED"
+	case StatusNetworkUp:
+		return "NETWORK_UP"
+	case StatusNetworkDown:
+		return "NETWORK_DOWN"
+	}
+	return fmt.Sprintf("%#02x", s)
+}
