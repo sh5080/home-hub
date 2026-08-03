@@ -186,3 +186,80 @@ func StatusName(s uint8) string {
 	}
 	return fmt.Sprintf("%#02x", s)
 }
+
+// ---------------------------------------------------------------------------
+// M3: letting nodes join.
+// ---------------------------------------------------------------------------
+
+// EzspPolicyId / EzspDecisionBitmask for the trust-centre join policy.
+const (
+	PolicyTrustCenter = 0x00
+
+	DecisionAllowJoins           = 0x0001
+	DecisionAllowUnsecuredRejoin = 0x0002
+)
+
+// joinPolicy lets new nodes join and lets a node that lost the network key
+// rejoin unsecured — the latter is what makes a switch that was power-cycled
+// during pairing recoverable instead of bricked out of the network.
+const joinPolicy = DecisionAllowJoins | DecisionAllowUnsecuredRejoin
+
+// PermitJoinForever is the duration byte meaning "until told otherwise".
+const PermitJoinForever = 0xFF
+
+// EmberDeviceUpdate: why trustCenterJoinHandler fired.
+const (
+	DeviceSecuredRejoin   = 0x00
+	DeviceUnsecuredJoin   = 0x01
+	DeviceLeft            = 0x02
+	DeviceUnsecuredRejoin = 0x03
+)
+
+// TrustCenterJoin is a decoded trustCenterJoinHandler callback.
+type TrustCenterJoin struct {
+	NodeID   uint16
+	IEEE     [8]byte
+	Update   uint8 // EmberDeviceUpdate
+	Decision uint8 // EmberJoinDecision
+	ParentID uint16
+}
+
+// IEEEString renders the IEEE address the way configs and logs use it.
+func (j TrustCenterJoin) IEEEString() string {
+	// The NCP sends EUI64 little-endian; addresses are written big-endian.
+	var b [8]byte
+	for i := range b {
+		b[i] = j.IEEE[7-i]
+	}
+	return fmt.Sprintf("0x%016X", binary.BigEndian.Uint64(b[:]))
+}
+
+// UpdateName renders EmberDeviceUpdate for logs.
+func UpdateName(u uint8) string {
+	switch u {
+	case DeviceSecuredRejoin:
+		return "secured-rejoin"
+	case DeviceUnsecuredJoin:
+		return "join"
+	case DeviceLeft:
+		return "left"
+	case DeviceUnsecuredRejoin:
+		return "unsecured-rejoin"
+	}
+	return fmt.Sprintf("%#02x", u)
+}
+
+// DecodeTrustCenterJoin parses a trustCenterJoinHandler payload:
+// [nodeId u16][eui64 8][deviceUpdate u8][joinDecision u8][parentNodeId u16].
+func DecodeTrustCenterJoin(p []byte) (TrustCenterJoin, error) {
+	const want = 2 + 8 + 1 + 1 + 2
+	if len(p) < want {
+		return TrustCenterJoin{}, fmt.Errorf("ezsp: trustCenterJoin payload too short (%d, want %d)", len(p), want)
+	}
+	j := TrustCenterJoin{NodeID: binary.LittleEndian.Uint16(p[0:2])}
+	copy(j.IEEE[:], p[2:10])
+	j.Update = p[10]
+	j.Decision = p[11]
+	j.ParentID = binary.LittleEndian.Uint16(p[12:14])
+	return j, nil
+}

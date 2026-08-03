@@ -82,6 +82,15 @@ func (d *Driver) bringUpNetwork(ctx context.Context) (NetworkState, error) {
 	if err != nil {
 		return NetworkState{}, err
 	}
+	if state.Joined() && d.cfg.ForceForm {
+		d.log.Warn("ezsp forceForm set — discarding the existing network",
+			"panId", fmt.Sprintf("%#04x", state.Params.PanID),
+			"channel", state.Params.RadioChannel)
+		if err := d.leaveNetwork(ctx); err != nil {
+			return NetworkState{}, err
+		}
+		state.Status = StatusNotJoined
+	}
 	if state.Joined() {
 		return state, nil
 	}
@@ -270,4 +279,119 @@ func statusOf(f Frame) string {
 		return "empty response"
 	}
 	return StatusName(f.Params[0])
+}
+
+// openForJoining sets the trust-centre policy and opens the network.
+//
+// The decision value's width changed with EZSP v8: the old EzspDecisionId was a
+// single byte, and TRUST_CENTER_POLICY now takes a two-byte EzspDecisionBitmask.
+// Rather than pin a width from documentation that disagrees with itself, send
+// the modern form and fall back to the legacy one if the NCP rejects it — the
+// status byte tells us which this dongle speaks, and the log records it.
+func (d *Driver) openForJoining(ctx context.Context, duration uint8) error {
+	if err := d.setJoinPolicy(ctx); err != nil {
+		return err
+	}
+	f, err := d.request(ctx, IDPermitJoining, []byte{duration})
+	if err != nil {
+		return fmt.Errorf("permitJoining: %w", err)
+	}
+	if len(f.Params) < 1 || f.Params[0] != StatusSuccess {
+		return fmt.Errorf("permitJoining rejected: %s", statusOf(f))
+	}
+	d.log.Info("ezsp network open for joining", "seconds", duration,
+		"hint", "put the switch into pairing mode now")
+	return nil
+}
+
+// setJoinPolicy applies the trust-centre join policy, trying the v8+ two-byte
+// decision bitmask before the pre-v8 single byte.
+func (d *Driver) setJoinPolicy(ctx context.Context) error {
+	wide := []byte{PolicyTrustCenter, byte(joinPolicy), byte(joinPolicy >> 8)}
+	f, err := d.request(ctx, IDSetPolicy, wide)
+	if err != nil {
+		return fmt.Errorf("setPolicy: %w", err)
+	}
+	if len(f.Params) >= 1 && f.Params[0] == StatusSuccess {
+		d.log.Debug("ezsp join policy set (v8+ 2-byte decision bitmask)")
+		return nil
+	}
+	d.log.Debug("ezsp join policy: 2-byte decision rejected, retrying legacy 1-byte",
+		"status", statusOf(f))
+
+	narrow := []byte{PolicyTrustCenter, byte(joinPolicy)}
+	f, err = d.request(ctx, IDSetPolicy, narrow)
+	if err != nil {
+		return fmt.Errorf("setPolicy (legacy): %w", err)
+	}
+	if len(f.Params) < 1 || f.Params[0] != StatusSuccess {
+		return fmt.Errorf("setPolicy rejected in both widths: %s", statusOf(f))
+	}
+	d.log.Debug("ezsp join policy set (legacy 1-byte decision)")
+	return nil
+}
+
+// joinRefreshInterval re-asserts the join window periodically. permitJoining is
+// meant to be indefinite at 0xFF, but a stack that resets its policy — or a
+// silently dead ASH link — is indistinguishable from "the switch never tried"
+// when nothing at all appears in the log. Re-asserting turns that into a
+// heartbeat: a line every interval means the NCP is still answering us.
+const joinRefreshInterval = 60 * time.Second
+
+// watchJoinWindow keeps the network open and proves the NCP link is alive while
+// pairing. It stops when ctx ends.
+func (d *Driver) watchJoinWindow(ctx context.Context) {
+	ticker := time.NewTicker(joinRefreshInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			state, err := d.GetNetworkParameters(ctx)
+			if err != nil {
+				d.log.Error("ezsp link check failed while pairing is open", "err", err)
+				continue
+			}
+			f, err := d.request(ctx, IDPermitJoining, []byte{PermitJoinForever})
+			if err != nil {
+				d.log.Error("ezsp permitJoining refresh failed", "err", err)
+				continue
+			}
+			d.log.Info("ezsp still open for joining",
+				"panId", fmt.Sprintf("%#04x", state.Params.PanID),
+				"channel", state.Params.RadioChannel,
+				"refresh", statusOf(f))
+		}
+	}
+}
+
+// leaveNetwork tears the current network down so a new one can be formed. This
+// is destructive: every paired device is orphaned and must re-join. It exists
+// because formNetwork is rejected while a network is up, and changing the
+// channel — the usual reason to start over — has no in-place equivalent.
+func (d *Driver) leaveNetwork(ctx context.Context) error {
+	f, err := d.request(ctx, IDLeaveNetwork, nil)
+	if err != nil {
+		return fmt.Errorf("leaveNetwork: %w", err)
+	}
+	if len(f.Params) < 1 || f.Params[0] != StatusSuccess {
+		return fmt.Errorf("leaveNetwork rejected: %s", statusOf(f))
+	}
+	// The stack reports NETWORK_DOWN before the NCP will accept formNetwork.
+	timer := time.NewTimer(networkUpTimeout)
+	defer timer.Stop()
+	for {
+		select {
+		case status := <-d.stackStatus:
+			if status == StatusNetworkDown {
+				d.log.Warn("ezsp left the Zigbee network — every paired device must re-join")
+				return nil
+			}
+		case <-timer.C:
+			return fmt.Errorf("ezsp: network did not go down within %s", networkUpTimeout)
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 }

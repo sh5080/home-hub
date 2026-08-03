@@ -48,6 +48,11 @@ type ZigbeeConfig struct {
 	// TxPower is the coordinator's radio transmit power in dBm at formation.
 	// 0 uses the default; raising it does not help if the far end is weak.
 	TxPower uint8 `yaml:"txPower,omitempty"`
+	// ForceForm discards the network stored in the dongle and forms a new one
+	// on startup. DESTRUCTIVE — every paired device must re-join. Changing
+	// `channel` alone does nothing to an existing network, so this is how a
+	// channel move is actually performed. Leave it off in normal operation.
+	ForceForm bool `yaml:"forceForm,omitempty"`
 }
 
 // MQTTConfig configures the embedded MQTT broker.

@@ -57,8 +57,39 @@ internal/zigbee/ezsp/
   `EzspDecisionId`(1바이트)에서 **`EzspDecisionBitmask`(2바이트)**로 바뀌었다. 조인 정책은
   M3에서 다루므로 M2에서는 일부러 건드리지 않았다. `setExtendedSecurityBitmask`
   (JOINER_GLOBAL_LINK_KEY)도 여기서 같이.
-- **M3** — `permitJoining(cfg.PermitJoin)` + `trustCenterJoinHandler`(조인 감지) →
-  Aqara decoupled 설정(zstack 드라이버 로직 재사용).
+- **M3 (코드 완료, 조인 미검증)** — `permitJoining` + `trustCenterJoinHandler`.
+  - `setPolicy(TRUST_CENTER_POLICY, ALLOW_JOINS|ALLOW_UNSECURED_REJOIN)`. ⚠️ v8+에서 결정값이
+    `EzspDecisionId`(1바이트) → **`EzspDecisionBitmask`(2바이트)**로 바뀌었다. 자료가 엇갈려서
+    2바이트를 먼저 보내고 거부되면 1바이트로 폴백하게 짰는데, **실기에서 2바이트가 통과**했다.
+  - `permitJoining(0xFF)`(무기한) + 60초마다 재확인 하트비트. 하트비트는 조인창 유지 겸
+    **NCP 링크 생존 증명**이다 — 아무 일도 안 일어날 때 "기기가 시도를 안 한 것"과 "우리 링크가
+    죽은 것"을 구분할 수 없어서 넣었다.
+  - `leaveNetwork` + `zigbee.forceForm`(⚠️ 파괴적). 채널을 바꾸는 유일한 수단이라 넣었다.
+  - `--log debug` 플래그(`cmd/hub`): 프로토콜 브링업엔 원시 프레임과 모델링하지 않은 콜백까지
+    보여야 한다.
+  - **조인 자체는 아직 실기 검증 안 됨.** 아래 "Aqara H2가 조인하지 않은 이유" 참고.
+- **M4/M5 — 보류.** Aqara H2가 전부 Matter로 갔고 전동커튼도 Zigbee가 아닐 가능성이 커서,
+  **현재 확정된 Zigbee 기기가 하나도 없다.** 새 Zigbee 기기가 생기면 그때 재개한다.
+
+## Aqara H2가 조인하지 않은 이유 (2026-09-02/03)
+
+코디네이터는 정상이었다. `addEndpoint` SUCCESS, `networkInit` SUCCESS, 조인 정책 적용,
+`EMBER_NETWORK_OPENED`, 하트비트 정상. 그런데 **조인 시도가 단 한 건도 없었다**(실패한 시도조차).
+아래를 다 시험했지만 전부 무반응이었다:
+
+| 시험 | 결과 |
+|---|---|
+| 채널 25 / 거리 있음 | 무반응 |
+| 채널 25 / 동글을 스위치 옆으로 | 무반응 |
+| 채널 15 + 출력 20dBm / 근접 | 무반응 |
+
+**원인: H2는 Aqara Home 앱 프로비저닝을 거쳐야 서드파티 코디네이터에 조인한다.**
+기기가 "Zigbee 모드"라고 앱에 표시되어도, 앱에서 프로토콜 선택 절차를 끝내지 않으면
+열린 네트워크가 있어도 조인하지 않는다. (H2는 **Thread 모드로 출고**되고, 프로토콜 전환은
+앱에서만 가능하다.)
+
+**교훈: 새 Zigbee 기기를 붙이기 전에 "제조사 앱 프로비저닝이 선행돼야 하는 기기인가"를 먼저
+확인할 것.** 이걸 모르면 코디네이터 쪽을 몇 시간 파게 된다.
 - **M4** — `Apply`: `sendUnicast`로 ZCL on/off + Window Covering 송신.
 - **M5** — `incomingMessageHandler` → ZCL 리포트 디코드(on/off, 커버 위치, Aqara multistate)
   → 버스 이벤트. **zstack 드라이버의 ZCL 인코딩/파싱(plain []byte 함수들)을 공용 `zcl` 헬퍼로

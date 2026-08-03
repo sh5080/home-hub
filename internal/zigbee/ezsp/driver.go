@@ -31,6 +31,11 @@ type Config struct {
 	PermitJoin bool
 	Channel    uint8 // 802.15.4 channel for a NEW network; 0 = default
 	TxPower    uint8 // coordinator radio power in dBm; 0 = default
+	// ForceForm discards any network already in the dongle and forms a fresh
+	// one. DESTRUCTIVE: every paired device is orphaned and must re-join. It
+	// is the only way to change channel, so it is a deliberate config switch
+	// rather than something inferred from a changed channel value.
+	ForceForm bool
 }
 
 // pending is the in-flight command awaiting its response. EZSP multiplexes
@@ -131,7 +136,14 @@ func (d *Driver) Start(ctx context.Context) error {
 		"channel", state.Params.RadioChannel,
 		"txPower", state.Params.RadioTxPower)
 
-	d.log.Warn("ezsp backend is M2 (network up); joining and ZCL not yet implemented")
+	if d.cfg.PermitJoin {
+		if err := d.openForJoining(ctx, PermitJoinForever); err != nil {
+			return fmt.Errorf("ezsp permit join: %w", err)
+		}
+		go d.watchJoinWindow(ctx)
+	}
+
+	d.log.Warn("ezsp backend is M3 (joining); ZCL send/receive not yet implemented")
 	select {
 	case err := <-errc:
 		return err
@@ -247,7 +259,16 @@ func (d *Driver) handleCallback(f Frame) {
 			return
 		}
 	case IDTrustCenterJoinHandler:
-		d.log.Info("ezsp trust-center join", "params", fmt.Sprintf("% X", f.Params))
+		j, err := DecodeTrustCenterJoin(f.Params)
+		if err != nil {
+			d.log.Warn("ezsp trust-center join undecodable", "params", fmt.Sprintf("% X", f.Params), "err", err)
+			return
+		}
+		d.log.Info("zigbee node "+UpdateName(j.Update),
+			"ieee", j.IEEEString(),
+			"nodeId", fmt.Sprintf("%#04x", j.NodeID),
+			"parent", fmt.Sprintf("%#04x", j.ParentID),
+			"hint", "put this ieee in the device config addr")
 		return
 	case IDIncomingMessageHandler:
 		d.log.Info("ezsp incoming message", "params", fmt.Sprintf("% X", f.Params))

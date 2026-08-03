@@ -70,9 +70,21 @@ func gmConfig(dc config.DeviceConfig) matter.GoMatterConfig {
 func main() {
 	cfgPath := flag.String("config", "configs/devices.yaml", "path to config file")
 	healthAddr := flag.String("health", ":8086", "health endpoint listen address")
+	logLevel := flag.String("log", "info", "log level: debug | info | warn | error")
 	flag.Parse()
 
-	log := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	// debug is what makes protocol bring-up legible: raw ASH/EZSP frames and
+	// every NCP callback, including ones the adapter does not model yet.
+	level := slog.LevelInfo
+	switch *logLevel {
+	case "debug":
+		level = slog.LevelDebug
+	case "warn":
+		level = slog.LevelWarn
+	case "error":
+		level = slog.LevelError
+	}
+	log := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: level}))
 
 	cfg, err := config.Load(*cfgPath)
 	if err != nil {
@@ -110,6 +122,7 @@ func main() {
 			PermitJoin: cfg.Zigbee.PermitJoin,
 			Channel:    cfg.Zigbee.Channel,
 			TxPower:    cfg.Zigbee.TxPower,
+			ForceForm:  cfg.Zigbee.ForceForm,
 		}, b, reg, log)
 		log.Info("zigbee backend: ezsp (ZBDongle-E)")
 	default:
