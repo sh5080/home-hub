@@ -43,6 +43,19 @@ HAP Lightbulb 노출, 파일 영속화(재시작해도 재페어링 불필요). 
 
 ---
 
+> ⚠️ **2026-09-03 정정.** 아래 Phase 1·2는 "H2 = Zigbee, 전동커튼 = Zigbee"라는 **실물 확인 전
+> 추정**으로 쓰였고, 둘 다 틀렸다.
+> - **H2는 Zigbee/Thread 듀얼이며 Thread로 출고된다.** 거실 스위치는 **Matter로 Apple Home에
+>   직접** 붙였다 — 허브를 거치지 않는다. 자세한 건 `docs/switch-strategy.md`.
+> - **전동커튼은 헤이홈(Hejhome) 앱으로 동작 중**이다. Zigbee라는 근거가 없다. 헤이홈이
+>   Matter 브리지를 제공하면 Apple Home 직행이고, Tuya OEM이면 `docs/tuya-protocol.md`의
+>   LAN 3.5 어댑터를 재사용한다. 집 랜에서 Tuya UDP 브로드캐스트 스캔으로 판별 가능.
+> - 결과적으로 **현재 확정된 Zigbee 기기가 하나도 없다.** EZSP 백엔드는 보류 상태다
+>   (`docs/ezsp-backend.md`).
+>
+> 허브가 대체 불가능한 영역은 **HomeKit이 모르는 프로토콜**뿐이다 — RF 447MHz, BLE FanLamp,
+> Tuya IR, SmartThings. Matter 기기는 허브 없이 Apple Home에 직행한다.
+
 ## Phase 2 — 전동블라인드(Matter) + 전동커튼(Zigbee)
 
 **대상:** 작업방 전동블라인드(Matter), 거실 전동커튼(Zigbee 커튼모듈).
