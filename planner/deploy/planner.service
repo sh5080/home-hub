@@ -1,0 +1,45 @@
+# /etc/systemd/system/planner.service
+#
+#   sudo mkdir -p /var/lib/planner/{bin,data} && sudo chown -R sh5080:sh5080 /var/lib/planner
+#   sudo cp planner/deploy/planner.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now planner
+#   journalctl -u planner -f
+#
+# 루프백에만 바인딩한다. 외부 접근은 tailscale serve --bg 8090 이 담당하므로
+# ufw 규칙이 필요 없고 인터넷에 노출되지 않는다.
+# 바이너리는 Mac에서 크로스컴파일해서 올린다 (make deploy). Pi에서 빌드하지 않는다.
+
+[Unit]
+Description=family planner (kanban / calendar / routines)
+Documentation=https://github.com/sh5080/home-hub
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=sh5080
+Group=sh5080
+WorkingDirectory=/var/lib/planner
+ExecStart=/var/lib/planner/bin/planner serve --listen 127.0.0.1:8090 --data /var/lib/planner/data
+Environment=TZ=Asia/Seoul
+
+Restart=always
+RestartSec=5s
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=planner
+
+# homehub보다 강하게 잠근다 — 장치(시리얼/USB) 접근이 전혀 필요 없는 프로세스다.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/planner
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+[Install]
+WantedBy=multi-user.target

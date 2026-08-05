@@ -1,0 +1,14 @@
+# Binaries
+/planner
+/planner-arm
+
+# Local dev data (SQLite + WAL)
+/data/
+
+# Frontend toolchain — built on the Mac, never committed
+web/node_modules/
+web/dist/
+
+# Vite output is embedded into the Go binary; keep only the placeholder
+internal/webui/dist/*
+!internal/webui/dist/.gitkeep
