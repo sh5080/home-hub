@@ -1,0 +1,47 @@
+import { Navigate, Outlet, Route, Routes } from 'react-router'
+import { useQuery } from '@tanstack/react-query'
+import { api, type User } from './api'
+import Shell from './components/Shell'
+import Login from './pages/Login'
+import Dashboard from './pages/Dashboard'
+import Board from './pages/Board'
+import Calendar from './pages/Calendar'
+import Routines from './pages/Routines'
+
+export default function App() {
+  return (
+    <Routes>
+      <Route path="/login" element={<Login />} />
+      <Route element={<RequireAuth />}>
+        <Route element={<Shell />}>
+          <Route index element={<Dashboard />} />
+          <Route path="boards" element={<Board />} />
+          <Route path="boards/:id" element={<Board />} />
+          <Route path="calendar" element={<Calendar />} />
+          <Route path="routines" element={<Routines />} />
+        </Route>
+      </Route>
+      <Route path="*" element={<Navigate to="/" replace />} />
+    </Routes>
+  )
+}
+
+// 로그인 게이트. /api/me 가 401이면 api.ts 가 /login 으로 보낸다.
+function RequireAuth() {
+  const me = useQuery({
+    queryKey: ['me'],
+    queryFn: () => api.get<User>('/api/me'),
+    retry: false,
+    refetchInterval: false,
+  })
+
+  if (me.isPending) {
+    return (
+      <div className="flex h-full items-center justify-center text-slate-400">
+        불러오는 중…
+      </div>
+    )
+  }
+  if (me.isError) return <Navigate to="/login" replace />
+  return <Outlet />
+}
