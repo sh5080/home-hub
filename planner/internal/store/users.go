@@ -10,6 +10,10 @@ import (
 	"github.com/sh5080/home-hub/planner/internal/auth"
 )
 
+// MinPasswordLen은 공개(tailscale funnel) 노출을 전제로 한 최소 길이다.
+// 4자는 랜 전용일 때의 값이었고, 인터넷에서 닿는 순간 너무 약하다.
+const MinPasswordLen = 8
+
 // ErrNotFound is returned when a row doesn't exist.
 var ErrNotFound = errors.New("not found")
 
@@ -36,8 +40,8 @@ func (s *Store) CreateUser(ctx context.Context, name, password string) (User, er
 	if name == "" {
 		return User{}, invalid("name is empty")
 	}
-	if len(password) < 4 {
-		return User{}, invalid("password must be at least 4 characters")
+	if len(password) < MinPasswordLen {
+		return User{}, invalid("비밀번호는 8자 이상이어야 해요")
 	}
 	hash, err := auth.HashPassword(password)
 	if err != nil {
@@ -58,8 +62,8 @@ func (s *Store) CreateUser(ctx context.Context, name, password string) (User, er
 
 // SetPassword replaces the hash for name.
 func (s *Store) SetPassword(ctx context.Context, name, password string) error {
-	if len(password) < 4 {
-		return invalid("password must be at least 4 characters")
+	if len(password) < MinPasswordLen {
+		return invalid("비밀번호는 8자 이상이어야 해요")
 	}
 	hash, err := auth.HashPassword(password)
 	if err != nil {
@@ -111,6 +115,59 @@ func (s *Store) ListUsers(ctx context.Context) ([]User, error) {
 		out = []User{}
 	}
 	return out, rows.Err()
+}
+
+// UserExists reports whether name is a real account. Used to tell a family
+// member's typo apart from a scanner probing made-up names.
+func (s *Store) UserExists(ctx context.Context, name string) bool {
+	var n int
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT count(*) FROM users WHERE name=?`, strings.TrimSpace(name)).Scan(&n); err != nil {
+		return false // 조회 실패 시 '없는 이름'으로 단정하지 않는다
+	}
+	return n > 0
+}
+
+// SetPasswordByID replaces the hash for a user id and invalidates every
+// session they had — a reset must revoke whoever held the old credential.
+func (s *Store) SetPasswordByID(ctx context.Context, id int64, password string) (User, error) {
+	if len(password) < MinPasswordLen {
+		return User{}, invalid("비밀번호는 8자 이상이어야 해요")
+	}
+	hash, err := auth.HashPassword(password)
+	if err != nil {
+		return User{}, err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return User{}, err
+	}
+	defer tx.Rollback()
+
+	var u User
+	err = tx.QueryRowContext(ctx, `SELECT id, name, created_at FROM users WHERE id=?`, id).
+		Scan(&u.ID, &u.Name, &u.CreatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return User{}, ErrNotFound
+	}
+	if err != nil {
+		return User{}, err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE users SET password_hash=? WHERE id=?`, hash, id); err != nil {
+		return User{}, err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM sessions WHERE user_id=?`, id); err != nil {
+		return User{}, err
+	}
+	// 재설정은 잠금 해제이기도 하다 — 가족이 잊어서 잠긴 상태를 그대로 두면
+	// 비밀번호를 바꾸고도 못 들어간다.
+	if _, err := tx.ExecContext(ctx, `DELETE FROM login_attempts WHERE key=?`, "user:"+u.Name); err != nil {
+		return User{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return User{}, err
+	}
+	return u, nil
 }
 
 // Authenticate checks name/password and returns the user on success.
