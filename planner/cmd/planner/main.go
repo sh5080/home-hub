@@ -1,4 +1,4 @@
-// planner — 가족 플래너 (칸반 · 캘린더 · 주간 루틴).
+// planner — 단아네 플래너 (칸반 · 캘린더 · 주간 루틴).
 //
 //	planner serve  [--listen 127.0.0.1:8090] [--data DIR] [--log LEVEL] [--dev]
 //	planner user add <name>     [--data DIR]   비밀번호는 터미널에서 입력
@@ -7,6 +7,7 @@
 //	planner user list           [--data DIR]
 //	planner backup [--out FILE] [--data DIR]   VACUUM INTO 스냅샷
 //	planner migrate status      [--data DIR]   적용/대기 마이그레이션 확인 (적용은 serve가 함)
+//	planner import notion <zip> [--board N] [--apply]  노션 export 가져오기 (기본 dry-run)
 //
 // 데이터 디렉터리는 --data 또는 PLANNER_DATA. Pi에서 CLI는 서비스와 같은 사용자
 // (sh5080)로 실행해야 -wal/-shm 파일 소유권이 꼬이지 않는다.
@@ -45,6 +46,8 @@ func main() {
 		err = cmdBackup(os.Args[2:])
 	case "migrate":
 		err = cmdMigrate(os.Args[2:])
+	case "import":
+		err = cmdImport(os.Args[2:])
 	case "-h", "--help", "help":
 		usage()
 		return
@@ -65,6 +68,7 @@ func usage() {
   planner user   add|passwd|del|list [name] [--data DIR]
   planner backup [--out FILE] [--data DIR]
   planner migrate status [--data DIR]
+  planner import notion <export.zip> [--board NAME] [--apply] [--data DIR]
 `)
 }
 
@@ -120,6 +124,10 @@ func cmdServe(args []string) error {
 		Addr:              *listen,
 		Handler:           api.New(st, log, *dev),
 		ReadHeaderTimeout: 5 * time.Second,
+		// slowloris 방지. bcrypt가 최대 ~3초(대기)+1초(해싱)이라 Write는 넉넉히 둔다.
+		ReadTimeout:  15 * time.Second,
+		WriteTimeout: 30 * time.Second,
+		IdleTimeout:  90 * time.Second,
 		// Request contexts derive from ctx so in-flight handlers observe SIGTERM.
 		BaseContext: func(net.Listener) context.Context { return ctx },
 	}
@@ -144,6 +152,11 @@ func cmdServe(args []string) error {
 					log.Warn("purge sessions", "err", err)
 				} else if n > 0 {
 					log.Debug("purged sessions", "n", n)
+				}
+				if n, err := st.PurgeLoginAttempts(ctx, now); err != nil {
+					log.Warn("purge login attempts", "err", err)
+				} else if n > 0 {
+					log.Debug("purged login attempts", "n", n)
 				}
 			}
 		}

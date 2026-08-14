@@ -17,13 +17,16 @@ type Server struct {
 	st  *store.Store
 	log *slog.Logger
 	dev bool // drops the Secure cookie flag so Vite's http://localhost works
+	// bcrypt는 Pi에서 한 번에 ~1초를 쓴다. 동시 실행을 묶어 CPU 고갈을 막는다.
+	bcrypt bcryptLimiter
 }
 
 // New builds the full handler: /api/* routes, then the SPA. Route order matters:
 // the /api/ catch-all 404 is registered so an unknown API path can never fall
 // through to index.html.
 func New(st *store.Store, log *slog.Logger, dev bool) http.Handler {
-	s := &Server{st: st, log: log, dev: dev}
+	s := &Server{st: st, log: log, dev: dev, bcrypt: newBcryptLimiter()}
+	devCSP = dev
 	mux := http.NewServeMux()
 
 	// --- public ---
@@ -38,13 +41,14 @@ func New(st *store.Store, log *slog.Logger, dev bool) http.Handler {
 	authed.HandleFunc("GET /api/me", s.me)
 	authed.HandleFunc("GET /api/users", s.listUsers)
 	authed.HandleFunc("POST /api/users", s.createUser)
+	authed.HandleFunc("POST /api/users/{id}/password", s.setPassword)
 	s.registerBoards(authed)
 	s.registerEvents(authed)
 	s.registerRoutines(authed)
 	authed.HandleFunc("/", notFound) // inner mux must also answer JSON, never the stdlib HTML 404
 	gated := auth.Middleware(st, authed)
 	for _, p := range []string{
-		"/api/logout", "/api/me", "/api/users",
+		"/api/logout", "/api/me", "/api/users", "/api/users/",
 		"/api/boards", "/api/boards/", "/api/columns/", "/api/cards/",
 		"/api/events", "/api/events/", "/api/routines", "/api/routines/", "/api/calendar", "/api/today",
 	} {
@@ -57,7 +61,7 @@ func New(st *store.Store, log *slog.Logger, dev bool) http.Handler {
 	// --- SPA (must be last) ---
 	mux.Handle("/", webui.Handler())
 
-	return s.logRequests(mux)
+	return securityHeaders(s.logRequests(mux))
 }
 
 func notFound(w http.ResponseWriter, _ *http.Request) {

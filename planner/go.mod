@@ -2,6 +2,10 @@ module github.com/sh5080/home-hub/planner
 
 go 1.26.0
 
+// stdlib 취약점(GO-2026-6090/6089/5972/5856)이 1.26.6에서 고쳐졌다.
+// 시스템 Go를 바꾸지 않고 이 모듈만 자동으로 해당 툴체인을 받아 쓴다.
+toolchain go1.26.6
+
 require modernc.org/sqlite v1.59.0
 
 require (
