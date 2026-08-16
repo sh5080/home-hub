@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"os"
 	"path/filepath"
 	"testing"
@@ -98,31 +99,55 @@ func TestModifiedMigrationIsRefused(t *testing.T) {
 	}
 }
 
-// TestLegacyUserVersionIsAdopted: a database from the PRAGMA user_version
-// era gets its history recorded instead of being re-migrated (which would
-// fail on CREATE TABLE).
+// TestLegacyUserVersionIsAdopted: PRAGMA user_version 시절에 만들어진 DB는
+// 이력을 기록만 하고 재적용하지 않는다(재적용하면 CREATE TABLE에서 깨진다).
+// 실기의 로컬·Pi DB가 그 방식으로 생겼기 때문에 필요한 경로다.
+//
+// 1번만 적용된 DB를 직접 만든다 — 최신 DB에서 이후 마이그레이션을 되돌리는
+// 방식이면 마이그레이션을 추가할 때마다 이 테스트를 고쳐야 한다.
 func TestLegacyUserVersionIsAdopted(t *testing.T) {
 	dir := t.TempDir()
-	st, err := Open(dir)
+	path := filepath.Join(dir, "planner.db")
+
+	migs, err := embeddedMigrations()
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Simulate the old scheme: drop the tracking table, set user_version.
-	if _, err := st.db.Exec(`DROP TABLE schema_migrations`); err != nil {
-		t.Fatal(err)
+	if len(migs) < 2 {
+		t.Skip("needs at least two migrations to be meaningful")
 	}
-	if _, err := st.db.Exec(`PRAGMA user_version = 1`); err != nil {
-		t.Fatal(err)
-	}
-	st.Close()
 
-	st, err = Open(dir)
+	raw, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.Exec(migs[0].body); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.Exec(`PRAGMA user_version = 1`); err != nil {
+		t.Fatal(err)
+	}
+	raw.Close()
+
+	st, err := Open(dir)
 	if err != nil {
 		t.Fatalf("adopting legacy db: %v", err)
 	}
 	st.Close()
+
 	applied, pending, err := Status(dir)
-	if err != nil || len(pending) != 0 || len(applied) != 1 {
-		t.Fatalf("applied=%v pending=%v err=%v", applied, pending, err)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 0 {
+		t.Fatalf("pending after adoption: %v", pending)
+	}
+	if len(applied) != len(migs) {
+		t.Fatalf("applied %d, want %d — adoption records 1, migrate applies the rest", len(applied), len(migs))
+	}
+	for _, a := range applied {
+		if a.Modified || a.Missing {
+			t.Fatalf("migration %d flagged after adoption: %+v", a.Version, a)
+		}
 	}
 }

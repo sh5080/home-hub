@@ -68,6 +68,14 @@ func Open(dir string) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
+	if err := s.backfillContent(); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := s.backfillPriority(); err != nil {
+		db.Close()
+		return nil, err
+	}
 	if err := s.seed(); err != nil {
 		db.Close()
 		return nil, err
@@ -335,6 +343,107 @@ func (s *Store) seed() error {
 		}
 	}
 	return tx.Commit()
+}
+
+// backfillContent는 0003 이전에 만들어진 카드(content IS NULL)의 평문 설명을
+// 단락 문서로 옮긴다. SQL이 아니라 Go에서 하는 건 문서 JSON의 모양을 한 곳
+// (PlainToContent)에만 두기 위해서다. 멱등이라 매 기동 시 돌아도 안전하다.
+func (s *Store) backfillContent() error {
+	rows, err := s.db.Query(`SELECT id, description FROM cards WHERE content IS NULL`)
+	if err != nil {
+		return fmt.Errorf("scan cards for backfill: %w", err)
+	}
+	type row struct {
+		id   int64
+		desc string
+	}
+	var pending []row
+	for rows.Next() {
+		var r row
+		if err := rows.Scan(&r.id, &r.desc); err != nil {
+			rows.Close()
+			return err
+		}
+		pending = append(pending, r)
+	}
+	rows.Close()
+	if len(pending) == 0 {
+		return nil
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, r := range pending {
+		if _, err := tx.Exec(`UPDATE cards SET content=? WHERE id=?`, PlainToContent(r.desc), r.id); err != nil {
+			return fmt.Errorf("backfill card %d: %w", r.id, err)
+		}
+	}
+	return tx.Commit()
+}
+
+// backfillPriority는 노션에서 가져올 때 본문 콜아웃 텍스트로만 들어갔던
+// 중요도(⭐ 개수)를 priority 컬럼으로 복구한다. LIKE로 걸러서 깨끗한 DB에서는
+// 비용이 없고, 이미 값이 있는 카드는 건드리지 않아 멱등이다.
+// 콜아웃 자체는 지우지 않는다 — 분류와 메모가 거기 같이 들어 있다.
+func (s *Store) backfillPriority() error {
+	rows, err := s.db.Query(`SELECT id, content FROM cards WHERE priority = 0 AND content LIKE '%중요도:%'`)
+	if err != nil {
+		return fmt.Errorf("scan cards for priority backfill: %w", err)
+	}
+	type row struct {
+		id int64
+		n  int
+	}
+	var pending []row
+	for rows.Next() {
+		var id int64
+		var content string
+		if err := rows.Scan(&id, &content); err != nil {
+			rows.Close()
+			return err
+		}
+		if n := starsAfter(content, "중요도:"); n > 0 {
+			pending = append(pending, row{id, n})
+		}
+	}
+	rows.Close()
+	if len(pending) == 0 {
+		return nil
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, r := range pending {
+		if _, err := tx.Exec(`UPDATE cards SET priority=? WHERE id=?`, r.n, r.id); err != nil {
+			return fmt.Errorf("backfill priority %d: %w", r.id, err)
+		}
+	}
+	return tx.Commit()
+}
+
+// starsAfter는 marker 바로 뒤에 이어지는 ⭐ 개수를 센다. 다음 구분자(·)나
+// 줄바꿈에서 멈춰, 본문 다른 곳의 별은 세지 않는다.
+func starsAfter(text, marker string) int {
+	i := strings.Index(text, marker)
+	if i < 0 {
+		return 0
+	}
+	n := 0
+	for _, r := range text[i+len(marker):] {
+		switch {
+		case r == '⭐':
+			n++
+		case r == ' ':
+			continue
+		default:
+			return min(n, maxPriority)
+		}
+	}
+	return min(n, maxPriority)
 }
 
 // Backup writes a consistent snapshot to dst using VACUUM INTO — safe to run
