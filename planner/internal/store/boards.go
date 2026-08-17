@@ -31,9 +31,11 @@ type Card struct {
 	ID          int64   `json:"id"`
 	ColumnID    int64   `json:"column_id"`
 	Title       string  `json:"title"`
-	Description string  `json:"description"`
+	Description string  `json:"description"` // content에서 파생한 평문 (미리보기·검색용)
+	Content     *string `json:"content"`     // 권위 있는 본문. 블록 문서 JSON
 	Position    int     `json:"position"`
-	DueDate     *string `json:"due_date"`
+	DueAt       *string `json:"due_at"`   // 'YYYY-MM-DD' 또는 'YYYY-MM-DDTHH:MM'
+	Priority    int     `json:"priority"` // 0=없음, 1~3
 	AssigneeID  *int64  `json:"assignee_id"`
 	CreatedBy   int64   `json:"created_by"`
 	CreatedAt   int64   `json:"created_at"`
@@ -124,8 +126,9 @@ func (s *Store) DeleteBoard(ctx context.Context, id int64) error {
 	return nil
 }
 
-// GetBoard loads the board, its columns in order, and each column's cards in order.
-func (s *Store) GetBoard(ctx context.Context, id int64) (BoardDetail, error) {
+// GetBoard loads the board, its columns in order, and each column's cards
+// ordered by sort (SortManual = 드래그로 정한 순서).
+func (s *Store) GetBoard(ctx context.Context, id int64, sortBy Sort) (BoardDetail, error) {
 	var d BoardDetail
 	err := s.db.QueryRowContext(ctx, `SELECT id, name, created_by, created_at FROM boards WHERE id=?`, id).
 		Scan(&d.Board.ID, &d.Board.Name, &d.Board.CreatedBy, &d.Board.CreatedAt)
@@ -160,16 +163,16 @@ func (s *Store) GetBoard(ctx context.Context, id int64) (BoardDetail, error) {
 	}
 
 	cards, err := s.db.QueryContext(ctx, `
-		SELECT c.id, c.column_id, c.title, c.description, c.position, c.due_date, c.assignee_id, c.created_by, c.created_at, c.updated_at
+		SELECT c.id, c.column_id, c.title, c.description, c.content, c.position, c.due_at, c.priority, c.assignee_id, c.created_by, c.created_at, c.updated_at
 		FROM cards c JOIN columns col ON col.id = c.column_id
-		WHERE col.board_id=? ORDER BY c.column_id, c.position, c.id`, id)
+		WHERE col.board_id=? ORDER BY c.column_id, `+orderBy(sortBy, "c."), id)
 	if err != nil {
 		return d, err
 	}
 	defer cards.Close()
 	for cards.Next() {
 		var c Card
-		if err := cards.Scan(&c.ID, &c.ColumnID, &c.Title, &c.Description, &c.Position, &c.DueDate, &c.AssigneeID, &c.CreatedBy, &c.CreatedAt, &c.UpdatedAt); err != nil {
+		if err := cards.Scan(&c.ID, &c.ColumnID, &c.Title, &c.Description, &c.Content, &c.Position, &c.DueAt, &c.Priority, &c.AssigneeID, &c.CreatedBy, &c.CreatedAt, &c.UpdatedAt); err != nil {
 			return d, err
 		}
 		if i, ok := byID[c.ColumnID]; ok {

@@ -20,10 +20,11 @@ type eventReq struct {
 	StartAt *string `json:"start_at"`
 	EndAt   *string `json:"end_at"`
 	AllDay  *bool   `json:"all_day"`
+	Content *string `json:"content"` // 블록 문서 JSON. description은 서버가 파생한다.
 }
 
 func (r eventReq) input() store.EventInput {
-	return store.EventInput{Title: r.Title, StartAt: r.StartAt, EndAt: r.EndAt, AllDay: r.AllDay}
+	return store.EventInput{Title: r.Title, StartAt: r.StartAt, EndAt: r.EndAt, AllDay: r.AllDay, Content: r.Content}
 }
 
 // rangeParams reads ?from=&to= (date or datetime strings). Missing → 400.
@@ -100,7 +101,7 @@ func (s *Server) calendar(w http.ResponseWriter, r *http.Request) {
 	if s.storeErr(w, err, "list events") {
 		return
 	}
-	// due_date is a bare date; compare against the date portion of the bounds.
+	// due_at is a bare date; compare against the date portion of the bounds.
 	due, err := s.st.DueCards(r.Context(), from[:10], to[:10])
 	if s.storeErr(w, err, "due cards") {
 		return

@@ -10,13 +10,15 @@ import (
 
 // Event is a calendar entry. Times are floating local strings (see 0001_init.sql).
 type Event struct {
-	ID        int64   `json:"id"`
-	Title     string  `json:"title"`
-	StartAt   string  `json:"start_at"`
-	EndAt     *string `json:"end_at"`
-	AllDay    bool    `json:"all_day"`
-	CreatedBy int64   `json:"created_by"`
-	CreatedAt int64   `json:"created_at"`
+	ID          int64   `json:"id"`
+	Title       string  `json:"title"`
+	StartAt     string  `json:"start_at"`
+	EndAt       *string `json:"end_at"`
+	AllDay      bool    `json:"all_day"`
+	Description string  `json:"description"` // content에서 파생한 평문
+	Content     *string `json:"content"`     // 권위 있는 본문. 블록 문서 JSON
+	CreatedBy   int64   `json:"created_by"`
+	CreatedAt   int64   `json:"created_at"`
 }
 
 // EventInput is create/patch input; nil = not provided.
@@ -25,6 +27,7 @@ type EventInput struct {
 	StartAt *string
 	EndAt   *string // "" clears
 	AllDay  *bool
+	Content *string // 블록 문서 JSON. description은 여기서 파생한다.
 }
 
 // validateEventTimes checks the start/end strings against all_day.
@@ -69,15 +72,26 @@ func (s *Store) CreateEvent(ctx context.Context, in EventInput, by int64) (Event
 	if in.EndAt != nil && *in.EndAt != "" {
 		end = in.EndAt
 	}
+	var content *string
+	desc := ""
+	if in.Content != nil {
+		plain, err := ValidateContent(*in.Content)
+		if err != nil {
+			return Event{}, err
+		}
+		content, desc = in.Content, plain
+	}
 	now := time.Now().Unix()
 	res, err := s.db.ExecContext(ctx, `
-		INSERT INTO events (title, start_at, end_at, all_day, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
-		title, *in.StartAt, end, allDay, by, now)
+		INSERT INTO events (title, start_at, end_at, all_day, description, content, created_by, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		title, *in.StartAt, end, allDay, desc, content, by, now)
 	if err != nil {
 		return Event{}, err
 	}
 	id, _ := res.LastInsertId()
-	return Event{ID: id, Title: title, StartAt: *in.StartAt, EndAt: end, AllDay: allDay, CreatedBy: by, CreatedAt: now}, nil
+	return Event{ID: id, Title: title, StartAt: *in.StartAt, EndAt: end, AllDay: allDay,
+		Description: desc, Content: content, CreatedBy: by, CreatedAt: now}, nil
 }
 
 // UpdateEvent patches the named fields, re-validating times against the
@@ -107,11 +121,19 @@ func (s *Store) UpdateEvent(ctx context.Context, id int64, in EventInput) (Event
 			cur.EndAt = in.EndAt
 		}
 	}
+	if in.Content != nil {
+		plain, err := ValidateContent(*in.Content)
+		if err != nil {
+			return Event{}, err
+		}
+		cur.Content, cur.Description = in.Content, plain
+	}
 	if err := validateEventTimes(cur.StartAt, cur.EndAt, cur.AllDay); err != nil {
 		return Event{}, err
 	}
-	if _, err := s.db.ExecContext(ctx, `UPDATE events SET title=?, start_at=?, end_at=?, all_day=? WHERE id=?`,
-		cur.Title, cur.StartAt, cur.EndAt, cur.AllDay, id); err != nil {
+	if _, err := s.db.ExecContext(ctx, `
+		UPDATE events SET title=?, start_at=?, end_at=?, all_day=?, description=?, content=? WHERE id=?`,
+		cur.Title, cur.StartAt, cur.EndAt, cur.AllDay, cur.Description, cur.Content, id); err != nil {
 		return Event{}, err
 	}
 	return cur, nil
@@ -120,8 +142,10 @@ func (s *Store) UpdateEvent(ctx context.Context, id int64, in EventInput) (Event
 // GetEvent loads one event.
 func (s *Store) GetEvent(ctx context.Context, id int64) (Event, error) {
 	var e Event
-	err := s.db.QueryRowContext(ctx, `SELECT id, title, start_at, end_at, all_day, created_by, created_at FROM events WHERE id=?`, id).
-		Scan(&e.ID, &e.Title, &e.StartAt, &e.EndAt, &e.AllDay, &e.CreatedBy, &e.CreatedAt)
+	err := s.db.QueryRowContext(ctx, `
+		SELECT id, title, start_at, end_at, all_day, description, content, created_by, created_at
+		FROM events WHERE id=?`, id).
+		Scan(&e.ID, &e.Title, &e.StartAt, &e.EndAt, &e.AllDay, &e.Description, &e.Content, &e.CreatedBy, &e.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Event{}, ErrNotFound
 	}
@@ -145,7 +169,7 @@ func (s *Store) DeleteEvent(ctx context.Context, id int64) error {
 // An event with no end is treated as a point at start_at.
 func (s *Store) ListEvents(ctx context.Context, from, to string) ([]Event, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, title, start_at, end_at, all_day, created_by, created_at
+		SELECT id, title, start_at, end_at, all_day, description, content, created_by, created_at
 		FROM events WHERE start_at < ? AND COALESCE(end_at, start_at) >= ?
 		ORDER BY start_at, id`, to, from)
 	if err != nil {
@@ -155,7 +179,7 @@ func (s *Store) ListEvents(ctx context.Context, from, to string) ([]Event, error
 	out := []Event{}
 	for rows.Next() {
 		var e Event
-		if err := rows.Scan(&e.ID, &e.Title, &e.StartAt, &e.EndAt, &e.AllDay, &e.CreatedBy, &e.CreatedAt); err != nil {
+		if err := rows.Scan(&e.ID, &e.Title, &e.StartAt, &e.EndAt, &e.AllDay, &e.Description, &e.Content, &e.CreatedBy, &e.CreatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, e)

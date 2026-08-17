@@ -11,10 +11,27 @@ import (
 // CardInput is what the API accepts for create/patch. Pointer fields are
 // "not provided" when nil, so a PATCH only touches what it names.
 type CardInput struct {
-	Title       *string
-	Description *string
-	DueDate     *string // "" clears
-	AssigneeID  *int64  // 0 clears
+	Title      *string
+	Content    *string // 블록 문서 JSON. description은 여기서 파생한다.
+	DueAt      *string // "" clears. 'YYYY-MM-DD' 또는 'YYYY-MM-DDTHH:MM'
+	AssigneeID *int64  // 0 clears
+	Priority   *int    // 0=없음, 1~3
+}
+
+// validDue는 마감 문자열을 받는다. 날짜만이면 "그날 언제든", 시각이 있으면
+// 그 시각이다. 사전식 비교가 둘 다에서 시간순이라 범위 쿼리는 동일하다.
+func validDue(s string) bool { return validDate(s) || validDateTime(s) }
+
+const maxPriority = 3
+
+func clampPriority(p int) int {
+	if p < 0 {
+		return 0
+	}
+	if p > maxPriority {
+		return maxPriority
+	}
+	return p
 }
 
 // CreateCard appends a card to the end of columnID.
@@ -26,16 +43,25 @@ func (s *Store) CreateCard(ctx context.Context, columnID int64, in CardInput, by
 	if title == "" {
 		return Card{}, invalid("title is empty")
 	}
+	var content *string
 	desc := ""
-	if in.Description != nil {
-		desc = *in.Description
+	if in.Content != nil {
+		plain, err := ValidateContent(*in.Content)
+		if err != nil {
+			return Card{}, err
+		}
+		content, desc = in.Content, plain
 	}
 	var due *string
-	if in.DueDate != nil && *in.DueDate != "" {
-		if !validDate(*in.DueDate) {
-			return Card{}, invalid("due_date must be YYYY-MM-DD")
+	if in.DueAt != nil && *in.DueAt != "" {
+		if !validDue(*in.DueAt) {
+			return Card{}, invalid("마감은 YYYY-MM-DD 또는 YYYY-MM-DDTHH:MM 형식이어야 해요")
 		}
-		due = in.DueDate
+		due = in.DueAt
+	}
+	priority := 0
+	if in.Priority != nil {
+		priority = clampPriority(*in.Priority)
 	}
 	var assignee *int64
 	if in.AssigneeID != nil && *in.AssigneeID != 0 {
@@ -61,9 +87,9 @@ func (s *Store) CreateCard(ctx context.Context, columnID int64, in CardInput, by
 	}
 	now := time.Now().Unix()
 	res, err := tx.ExecContext(ctx, `
-		INSERT INTO cards (column_id, title, description, position, due_date, assignee_id, created_by, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		columnID, title, desc, pos, due, assignee, by, now, now)
+		INSERT INTO cards (column_id, title, description, content, position, due_at, priority, assignee_id, created_by, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		columnID, title, desc, content, pos, due, priority, assignee, by, now, now)
 	if err != nil {
 		return Card{}, err
 	}
@@ -71,8 +97,8 @@ func (s *Store) CreateCard(ctx context.Context, columnID int64, in CardInput, by
 	if err := tx.Commit(); err != nil {
 		return Card{}, err
 	}
-	return Card{ID: id, ColumnID: columnID, Title: title, Description: desc, Position: pos,
-		DueDate: due, AssigneeID: assignee, CreatedBy: by, CreatedAt: now, UpdatedAt: now}, nil
+	return Card{ID: id, ColumnID: columnID, Title: title, Description: desc, Content: content, Position: pos,
+		DueAt: due, Priority: priority, AssigneeID: assignee, CreatedBy: by, CreatedAt: now, UpdatedAt: now}, nil
 }
 
 // UpdateCard patches the named fields.
@@ -87,20 +113,28 @@ func (s *Store) UpdateCard(ctx context.Context, id int64, in CardInput) (Card, e
 		sets = append(sets, "title=?")
 		args = append(args, t)
 	}
-	if in.Description != nil {
-		sets = append(sets, "description=?")
-		args = append(args, *in.Description)
-	}
-	if in.DueDate != nil {
-		if *in.DueDate == "" {
-			sets = append(sets, "due_date=NULL")
-		} else {
-			if !validDate(*in.DueDate) {
-				return Card{}, invalid("due_date must be YYYY-MM-DD")
-			}
-			sets = append(sets, "due_date=?")
-			args = append(args, *in.DueDate)
+	if in.Content != nil {
+		plain, err := ValidateContent(*in.Content)
+		if err != nil {
+			return Card{}, err
 		}
+		sets = append(sets, "content=?", "description=?")
+		args = append(args, *in.Content, plain)
+	}
+	if in.DueAt != nil {
+		if *in.DueAt == "" {
+			sets = append(sets, "due_at=NULL")
+		} else {
+			if !validDue(*in.DueAt) {
+				return Card{}, invalid("마감은 YYYY-MM-DD 또는 YYYY-MM-DDTHH:MM 형식이어야 해요")
+			}
+			sets = append(sets, "due_at=?")
+			args = append(args, *in.DueAt)
+		}
+	}
+	if in.Priority != nil {
+		sets = append(sets, "priority=?")
+		args = append(args, clampPriority(*in.Priority))
 	}
 	if in.AssigneeID != nil {
 		if *in.AssigneeID == 0 {
@@ -129,13 +163,60 @@ func (s *Store) UpdateCard(ctx context.Context, id int64, in CardInput) (Card, e
 func (s *Store) GetCard(ctx context.Context, id int64) (Card, error) {
 	var c Card
 	err := s.db.QueryRowContext(ctx, `
-		SELECT id, column_id, title, description, position, due_date, assignee_id, created_by, created_at, updated_at
+		SELECT id, column_id, title, description, content, position, due_at, priority, assignee_id, created_by, created_at, updated_at
 		FROM cards WHERE id=?`, id).
-		Scan(&c.ID, &c.ColumnID, &c.Title, &c.Description, &c.Position, &c.DueDate, &c.AssigneeID, &c.CreatedBy, &c.CreatedAt, &c.UpdatedAt)
+		Scan(&c.ID, &c.ColumnID, &c.Title, &c.Description, &c.Content, &c.Position, &c.DueAt, &c.Priority, &c.AssigneeID, &c.CreatedBy, &c.CreatedAt, &c.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Card{}, ErrNotFound
 	}
 	return c, err
+}
+
+// CardDetail은 카드 상세 페이지가 한 번에 필요한 것 — 카드, 속한 보드,
+// 그리고 상태(컬럼) 선택지. 컬럼에는 카드를 싣지 않는다(페이지가 안 쓴다).
+type CardDetail struct {
+	Card    Card     `json:"card"`
+	Board   Board    `json:"board"`
+	Columns []Column `json:"columns"`
+}
+
+// GetCardDetail loads a card with its board and the board's columns.
+func (s *Store) GetCardDetail(ctx context.Context, id int64) (CardDetail, error) {
+	var d CardDetail
+	c, err := s.GetCard(ctx, id)
+	if err != nil {
+		return d, err
+	}
+	d.Card = c
+
+	err = s.db.QueryRowContext(ctx, `
+		SELECT b.id, b.name, b.created_by, b.created_at
+		FROM boards b JOIN columns col ON col.board_id = b.id
+		WHERE col.id = ?`, c.ColumnID).
+		Scan(&d.Board.ID, &d.Board.Name, &d.Board.CreatedBy, &d.Board.CreatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return d, ErrNotFound
+	}
+	if err != nil {
+		return d, err
+	}
+
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, board_id, name, position FROM columns WHERE board_id=? ORDER BY position, id`, d.Board.ID)
+	if err != nil {
+		return d, err
+	}
+	defer rows.Close()
+	d.Columns = []Column{}
+	for rows.Next() {
+		var col Column
+		if err := rows.Scan(&col.ID, &col.BoardID, &col.Name, &col.Position); err != nil {
+			return d, err
+		}
+		col.Cards = []Card{}
+		d.Columns = append(d.Columns, col)
+	}
+	return d, rows.Err()
 }
 
 // MoveCard places card id at index newPos in column toColumn using splice
@@ -231,8 +312,8 @@ func (s *Store) DeleteCard(ctx context.Context, id int64) error {
 // DueCards returns cards with a due date in [from, to).
 func (s *Store) DueCards(ctx context.Context, from, to string) ([]Card, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, column_id, title, description, position, due_date, assignee_id, created_by, created_at, updated_at
-		FROM cards WHERE due_date >= ? AND due_date < ? ORDER BY due_date, id`, from, to)
+		SELECT id, column_id, title, description, content, position, due_at, priority, assignee_id, created_by, created_at, updated_at
+		FROM cards WHERE due_at >= ? AND due_at < ? ORDER BY due_at, id`, from, to)
 	if err != nil {
 		return nil, err
 	}
@@ -240,7 +321,7 @@ func (s *Store) DueCards(ctx context.Context, from, to string) ([]Card, error) {
 	out := []Card{}
 	for rows.Next() {
 		var c Card
-		if err := rows.Scan(&c.ID, &c.ColumnID, &c.Title, &c.Description, &c.Position, &c.DueDate, &c.AssigneeID, &c.CreatedBy, &c.CreatedAt, &c.UpdatedAt); err != nil {
+		if err := rows.Scan(&c.ID, &c.ColumnID, &c.Title, &c.Description, &c.Content, &c.Position, &c.DueAt, &c.Priority, &c.AssigneeID, &c.CreatedBy, &c.CreatedAt, &c.UpdatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, c)
@@ -273,16 +354,16 @@ type TodoCard struct {
 // board — the kanban convention for "to do" — ordered by due date first, then
 // board, then position. The last column (max position) is reported as the
 // completion target.
-func (s *Store) TodoCards(ctx context.Context) ([]TodoCard, error) {
+func (s *Store) TodoCards(ctx context.Context, sortBy Sort) ([]TodoCard, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT c.id, c.column_id, c.title, c.description, c.position, c.due_date, c.assignee_id, c.created_by, c.created_at, c.updated_at,
+		SELECT c.id, c.column_id, c.title, c.description, c.content, c.position, c.due_at, c.priority, c.assignee_id, c.created_by, c.created_at, c.updated_at,
 		       b.id, b.name,
 		       (SELECT id FROM columns d WHERE d.board_id = b.id ORDER BY d.position DESC, d.id DESC LIMIT 1)
 		FROM cards c
 		JOIN columns col ON col.id = c.column_id
 		JOIN boards b ON b.id = col.board_id
 		WHERE col.position = 0
-		ORDER BY c.due_date IS NULL, c.due_date, b.id, c.position, c.id`)
+		ORDER BY `+orderBy(sortBy, "c.")+`, b.id`)
 	if err != nil {
 		return nil, err
 	}
@@ -290,7 +371,7 @@ func (s *Store) TodoCards(ctx context.Context) ([]TodoCard, error) {
 	out := []TodoCard{}
 	for rows.Next() {
 		var t TodoCard
-		if err := rows.Scan(&t.ID, &t.ColumnID, &t.Title, &t.Description, &t.Position, &t.DueDate, &t.AssigneeID, &t.CreatedBy, &t.CreatedAt, &t.UpdatedAt,
+		if err := rows.Scan(&t.ID, &t.ColumnID, &t.Title, &t.Description, &t.Content, &t.Position, &t.DueAt, &t.Priority, &t.AssigneeID, &t.CreatedBy, &t.CreatedAt, &t.UpdatedAt,
 			&t.BoardID, &t.BoardName, &t.DoneColumnID); err != nil {
 			return nil, err
 		}

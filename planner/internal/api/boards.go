@@ -19,6 +19,7 @@ func (s *Server) registerBoards(m *http.ServeMux) {
 	m.HandleFunc("PATCH /api/columns/{id}", s.renameColumn)
 	m.HandleFunc("DELETE /api/columns/{id}", s.deleteColumn)
 	m.HandleFunc("POST /api/columns/{id}/cards", s.createCard)
+	m.HandleFunc("GET /api/cards/{id}", s.getCard)
 	m.HandleFunc("PATCH /api/cards/{id}", s.patchCard)
 	m.HandleFunc("DELETE /api/cards/{id}", s.deleteCard)
 }
@@ -82,7 +83,7 @@ func (s *Server) getBoard(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	d, err := s.st.GetBoard(r.Context(), id)
+	d, err := s.st.GetBoard(r.Context(), id, store.ParseSort(r.URL.Query().Get("sort")))
 	if s.storeErr(w, err, "get board") {
 		return
 	}
@@ -160,16 +161,17 @@ func (s *Server) deleteColumn(w http.ResponseWriter, r *http.Request) {
 // cardReq covers both create and patch. For patch, absent fields are left
 // alone; column_id+position together mean "move".
 type cardReq struct {
-	Title       *string `json:"title"`
-	Description *string `json:"description"`
-	DueDate     *string `json:"due_date"`
-	AssigneeID  *int64  `json:"assignee_id"`
-	ColumnID    *int64  `json:"column_id"`
-	Position    *int    `json:"position"`
+	Title      *string `json:"title"`
+	Content    *string `json:"content"` // 블록 문서 JSON. description은 서버가 파생한다.
+	DueAt      *string `json:"due_at"`  // 'YYYY-MM-DD' 또는 'YYYY-MM-DDTHH:MM'
+	Priority   *int    `json:"priority"`
+	AssigneeID *int64  `json:"assignee_id"`
+	ColumnID   *int64  `json:"column_id"`
+	Position   *int    `json:"position"`
 }
 
 func (r cardReq) input() store.CardInput {
-	return store.CardInput{Title: r.Title, Description: r.Description, DueDate: r.DueDate, AssigneeID: r.AssigneeID}
+	return store.CardInput{Title: r.Title, Content: r.Content, DueAt: r.DueAt, AssigneeID: r.AssigneeID, Priority: r.Priority}
 }
 
 func (s *Server) createCard(w http.ResponseWriter, r *http.Request) {
@@ -187,6 +189,18 @@ func (s *Server) createCard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, c)
+}
+
+func (s *Server) getCard(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	d, err := s.st.GetCardDetail(r.Context(), id)
+	if s.storeErr(w, err, "get card") {
+		return
+	}
+	writeJSON(w, http.StatusOK, d)
 }
 
 func (s *Server) patchCard(w http.ResponseWriter, r *http.Request) {
