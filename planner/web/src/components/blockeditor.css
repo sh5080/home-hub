@@ -1,0 +1,92 @@
+/* BlockNote를 노션에 가까운 타이포그래피로. 기본 스타일은 데스크톱 기준이라
+   폰에서의 여백·크기와 블록 간 리듬을 다시 잡는다. */
+
+.bn-container {
+  --bn-font-family: inherit;
+  --bn-colors-editor-background: transparent;
+  background: transparent;
+}
+
+/* 왼쪽 여백은 사이드 메뉴(+ 와 드래그 핸들) 자리다. BlockNote 기본값이
+   좌우 54px인데, 이걸 0으로 덮으면 메뉴가 화면 밖으로 밀려 안 보인다.
+   오른쪽만 회수하고 왼쪽은 남긴다. */
+.bn-editor {
+  padding-left: 48px !important;
+  padding-right: 0 !important;
+  font-size: 15px;
+  line-height: 1.7;
+  color: #1e293b; /* slate-800 */
+}
+
+/* 블록 사이 간격 — 기본값은 촘촘해서 문서가 답답해 보인다 */
+.bn-block-outer:not(:first-child) {
+  margin-top: 2px;
+}
+
+/* 제목: 노션처럼 위쪽 여백을 크게, 아래는 작게 */
+.bn-block-content[data-content-type='heading'] {
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+.bn-block-outer:has(> .bn-block > .bn-block-content[data-content-type='heading']) {
+  margin-top: 1.5em;
+  margin-bottom: 0.2em;
+}
+.bn-block-content[data-level='1'] { font-size: 1.6em; line-height: 1.3; }
+.bn-block-content[data-level='2'] { font-size: 1.3em; line-height: 1.35; }
+.bn-block-content[data-level='3'] { font-size: 1.1em; line-height: 1.4; }
+
+/* 인용 */
+.bn-block-content[data-content-type='quote'] {
+  border-left: 3px solid #cbd5e1;
+  padding-left: 0.9em;
+  color: #475569;
+}
+
+/* 코드 */
+.bn-block-content[data-content-type='codeBlock'] {
+  font-size: 13px;
+  border-radius: 0.5rem;
+}
+
+/* 체크 완료된 항목은 흐리게 — 노션과 같은 시각적 피드백 */
+.bn-block-content[data-content-type='checkListItem'][data-checked='true'] .bn-inline-content {
+  color: #94a3b8;
+  text-decoration: line-through;
+}
+
+/* 구분선 */
+.bn-block-content[data-content-type='divider'] hr {
+  border: none;
+  border-top: 1px solid #e2e8f0;
+  margin: 1.2em 0;
+}
+
+/* 슬래시 메뉴·툴바를 앱 톤에 맞춘다 */
+.bn-suggestion-menu,
+.mantine-Menu-dropdown,
+.bn-toolbar {
+  border-radius: 0.75rem !important;
+  box-shadow: 0 8px 24px rgb(15 23 42 / 0.12) !important;
+  border: 1px solid #e2e8f0 !important;
+}
+
+/* 좁은 화면: 드래그 핸들과 + 버튼이 본문을 가리지 않게 왼쪽 여백 확보 */
+@media (max-width: 640px) {
+  /* 폰은 가로가 아쉽다. 페이지 좌우 패딩(16px)을 되찾아 본문 폭을 넓히고,
+     사이드 메뉴 자리는 그대로 유지한다. */
+  .bn-container {
+    margin-left: -1rem;
+    margin-right: -1rem;
+  }
+  .bn-editor {
+    padding-left: 44px !important;
+    padding-right: 12px !important;
+    font-size: 16px; /* iOS가 16px 미만이면 포커스 시 확대한다 */
+  }
+  /* 손가락으로 잡기 좋게 키운다 */
+  .bn-side-menu {
+    transform: scale(1.2);
+    transform-origin: left center;
+  }
+}
