@@ -31,7 +31,7 @@ func (s *Server) today(w http.ResponseWriter, r *http.Request) {
 	if s.storeErr(w, err, "routines for date") {
 		return
 	}
-	cards, err := s.st.TodoCards(r.Context())
+	cards, err := s.st.TodoCards(r.Context(), store.ParseSort(r.URL.Query().Get("sort")))
 	if s.storeErr(w, err, "todo cards") {
 		return
 	}

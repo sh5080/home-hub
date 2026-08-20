@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
+	"sync"
 	"testing"
 
 	"github.com/sh5080/home-hub/planner/internal/store"
@@ -27,7 +29,10 @@ func newClient(t *testing.T) *client {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { st.Close() })
-	if _, err := st.CreateUser(context.Background(), "엄마", "pass1234"); err != nil {
+	if _, err := st.CreateUser(context.Background(), "테스트1", "pass1234"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.CreateUser(context.Background(), "테스트2", "pass5678"); err != nil {
 		t.Fatal(err)
 	}
 	h := New(st, slog.New(slog.NewTextHandler(io.Discard, nil)), true)
@@ -88,9 +93,9 @@ func TestSmoke(t *testing.T) {
 
 	// login
 	var me map[string]any
-	c.must("POST", "/api/login", map[string]string{"name": "엄마", "password": "wrong"}, nil, 401)
-	c.must("POST", "/api/login", map[string]string{"name": "엄마", "password": "pass1234"}, &me, 200)
-	if me["name"] != "엄마" {
+	c.must("POST", "/api/login", map[string]string{"name": "테스트1", "password": "wrong"}, nil, 401)
+	c.must("POST", "/api/login", map[string]string{"name": "테스트1", "password": "pass1234"}, &me, 200)
+	if me["name"] != "테스트1" {
 		t.Fatalf("me = %v", me)
 	}
 	c.must("GET", "/api/me", nil, &me, 200)
@@ -110,12 +115,12 @@ func TestSmoke(t *testing.T) {
 	}
 	todo, doing := d.Columns[0].ID, d.Columns[1].ID
 
-	// create two cards, move the first into 진행 중
+	// create two cards, move the first into 진행 중 (content는 블록 문서)
 	var a, b store.Card
-	c.must("POST", "/api/columns/"+itoa(todo)+"/cards", map[string]any{"title": "장보기", "due_date": "2026-09-25"}, &a, 201)
+	c.must("POST", "/api/columns/"+itoa(todo)+"/cards", map[string]any{"title": "장보기", "due_at": "2026-09-25"}, &a, 201)
 	c.must("POST", "/api/columns/"+itoa(todo)+"/cards", map[string]any{"title": "청소"}, &b, 201)
 	c.must("POST", "/api/columns/"+itoa(todo)+"/cards", map[string]any{"title": ""}, nil, 400)
-	c.must("POST", "/api/columns/"+itoa(todo)+"/cards", map[string]any{"title": "x", "due_date": "25/09"}, nil, 400)
+	c.must("POST", "/api/columns/"+itoa(todo)+"/cards", map[string]any{"title": "x", "due_at": "25/09"}, nil, 400)
 
 	var moved store.Card
 	c.must("PATCH", "/api/cards/"+itoa(a.ID), map[string]any{"column_id": doing, "position": 0}, &moved, 200)
@@ -200,7 +205,173 @@ func TestSmoke(t *testing.T) {
 	c.must("GET", "/api/me", nil, nil, 401)
 }
 
+// 비밀번호 재설정: 행위자 본인 확인이 게이트이고, 성공하면 대상의 세션이 끊긴다.
+func TestPasswordReset(t *testing.T) {
+	c := newClient(t)
+	c.must("POST", "/api/login", map[string]string{"name": "테스트1", "password": "pass1234"}, nil, 200)
+
+	// 테스트2(id 2)를 재설정하려면 테스트1 본인 비밀번호가 필요하다.
+	c.must("POST", "/api/users/2/password",
+		map[string]string{"current_password": "틀린비번", "new_password": "newpass123"}, nil, 403)
+	// 8자 미만은 거부.
+	c.must("POST", "/api/users/2/password",
+		map[string]string{"current_password": "pass1234", "new_password": "short"}, nil, 400)
+	// 정상 재설정.
+	c.must("POST", "/api/users/2/password",
+		map[string]string{"current_password": "pass1234", "new_password": "newpass123"}, nil, 204)
+
+	// 테스트1 세션은 그대로다 (대상이 테스트2였으므로).
+	c.must("GET", "/api/me", nil, nil, 200)
+
+	// 테스트2는 새 비밀번호로만 들어간다.
+	d := newClientSharing(t, c)
+	d.must("POST", "/api/login", map[string]string{"name": "테스트2", "password": "pass5678"}, nil, 401)
+	d.must("POST", "/api/login", map[string]string{"name": "테스트2", "password": "newpass123"}, nil, 200)
+}
+
+// 본인 재설정은 쿠키를 새로 발급해 로그아웃되지 않는다.
+func TestSelfPasswordChangeKeepsSession(t *testing.T) {
+	c := newClient(t)
+	c.must("POST", "/api/login", map[string]string{"name": "테스트1", "password": "pass1234"}, nil, 200)
+	c.must("POST", "/api/users/1/password",
+		map[string]string{"current_password": "pass1234", "new_password": "brandnew123"}, nil, 204)
+	c.must("GET", "/api/me", nil, nil, 200) // 새 쿠키로 계속 유효
+}
+
+// 로그인 레이트리밋이 HTTP 경로에서도 동작하고 Retry-After를 준다.
+func TestLoginRateLimit(t *testing.T) {
+	c := newClient(t)
+	for i := 0; i < 5; i++ {
+		c.must("POST", "/api/login", map[string]string{"name": "테스트1", "password": "wrong"}, nil, 401)
+	}
+	res := c.raw("POST", "/api/login", map[string]string{"name": "테스트1", "password": "pass1234"})
+	if res.StatusCode != 429 {
+		t.Fatalf("status %d, want 429 after repeated failures", res.StatusCode)
+	}
+	if res.Header.Get("Retry-After") == "" {
+		t.Fatal("429 must carry Retry-After")
+	}
+}
+
+// newClientSharing은 같은 서버를 쓰되 쿠키 병을 따로 가진 클라이언트다.
+func newClientSharing(t *testing.T, c *client) *client {
+	return &client{t: t, srv: c.srv}
+}
+
+// raw는 상태 코드와 헤더를 봐야 할 때 쓴다.
+func (c *client) raw(method, path string, body any) *http.Response {
+	c.t.Helper()
+	b, _ := json.Marshal(body)
+	req, _ := http.NewRequest(method, c.srv.URL+path, bytes.NewReader(b))
+	req.Header.Set("Content-Type", "application/json")
+	for _, ck := range c.jar {
+		req.AddCookie(ck)
+	}
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		c.t.Fatal(err)
+	}
+	res.Body.Close()
+	return res
+}
+
 func itoa(i int64) string {
 	b, _ := json.Marshal(i)
 	return string(b)
+}
+
+// 동시 로그인 폭주가 bcrypt를 병렬로 태우지 못하는지. 레이트리밋은 '확인 →
+// bcrypt → 기록' 순서라 동시 요청을 못 막는다 — 세마포어가 그 축을 맡는다.
+func TestConcurrentLoginsAreThrottled(t *testing.T) {
+	c := newClient(t)
+	const n = 12
+	var wg sync.WaitGroup
+	codes := make([]int, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			d := &client{t: t, srv: c.srv}
+			codes[i] = d.do("POST", "/api/login", map[string]string{"name": "테스트1", "password": "wrong"}, nil)
+		}(i)
+	}
+	wg.Wait()
+	// 전부 처리되긴 해야 한다(429/503/401 중 하나) — 무응답이나 500은 안 된다.
+	for i, code := range codes {
+		switch code {
+		case 401, 429, 503:
+		default:
+			t.Fatalf("request %d: unexpected status %d", i, code)
+		}
+	}
+}
+
+// 보안 헤더가 모든 응답에 붙는지.
+func TestSecurityHeaders(t *testing.T) {
+	c := newClient(t)
+	res := c.raw("POST", "/api/login", map[string]string{"name": "x", "password": "y"})
+	for _, h := range []string{"X-Frame-Options", "X-Content-Type-Options", "Content-Security-Policy", "Referrer-Policy"} {
+		if res.Header.Get(h) == "" {
+			t.Errorf("missing security header %s", h)
+		}
+	}
+	if got := res.Header.Get("X-Frame-Options"); got != "DENY" {
+		t.Errorf("X-Frame-Options = %q, want DENY", got)
+	}
+	if csp := res.Header.Get("Content-Security-Policy"); !strings.Contains(csp, "frame-ancestors 'none'") {
+		t.Errorf("CSP missing frame-ancestors: %q", csp)
+	}
+}
+
+// 카드 상세 + 본문(블록 문서) 왕복. 서버가 description을 파생하는지,
+// 허용하지 않는 블록을 거절하는지가 핵심이다.
+func TestCardDetailAndContent(t *testing.T) {
+	c := newClient(t)
+	c.must("POST", "/api/login", map[string]string{"name": "테스트1", "password": "pass1234"}, nil, 200)
+
+	var d store.BoardDetail
+	c.must("GET", "/api/boards/1", nil, &d, 200)
+	todo := d.Columns[0].ID
+
+	var card store.Card
+	c.must("POST", "/api/columns/"+itoa(todo)+"/cards", map[string]any{"title": "장보기"}, &card, 201)
+
+	// 상세는 카드 + 보드 + 컬럼 선택지를 한 번에 준다.
+	var detail store.CardDetail
+	c.must("GET", "/api/cards/"+itoa(card.ID), nil, &detail, 200)
+	if detail.Card.ID != card.ID || detail.Board.ID != 1 || len(detail.Columns) != 3 {
+		t.Fatalf("detail = %+v", detail)
+	}
+
+	// 본문 저장 → description이 파생된다.
+	doc := `[{"type":"heading","props":{"level":2},"content":[{"type":"text","text":"살 것"}],"children":[]},` +
+		`{"type":"checkListItem","props":{"checked":false},"content":[{"type":"text","text":"우유"}],"children":[]}]`
+	var saved store.Card
+	c.must("PATCH", "/api/cards/"+itoa(card.ID), map[string]any{"content": doc}, &saved, 200)
+	if saved.Content == nil || *saved.Content != doc {
+		t.Fatalf("content not stored verbatim")
+	}
+	if !strings.Contains(saved.Description, "살 것") || !strings.Contains(saved.Description, "우유") {
+		t.Fatalf("description should be derived from content, got %q", saved.Description)
+	}
+
+	// 모르는 블록 타입은 400이고, 타입 이름을 알려준다.
+	var errBody map[string]string
+	c.must("PATCH", "/api/cards/"+itoa(card.ID),
+		map[string]any{"content": `[{"type":"evilScript","content":[],"children":[]}]`}, &errBody, 400)
+	if !strings.Contains(errBody["error"], "evilScript") {
+		t.Fatalf("error should name the rejected block type: %q", errBody["error"])
+	}
+
+	// 깨진 JSON도 400.
+	c.must("PATCH", "/api/cards/"+itoa(card.ID), map[string]any{"content": "not json"}, nil, 400)
+
+	// 거절된 뒤에도 원래 본문이 남아 있다.
+	c.must("GET", "/api/cards/"+itoa(card.ID), nil, &detail, 200)
+	if detail.Card.Content == nil || *detail.Card.Content != doc {
+		t.Fatal("rejected write must not clobber stored content")
+	}
+
+	// 없는 카드는 404 JSON.
+	c.must("GET", "/api/cards/99999", nil, nil, 404)
 }
