@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { Link } from 'react-router'
 import { api, type Event } from '../api'
 import { useCalendar, useInvalidating } from '../lib/hooks'
-import { addDays, addMonths, fmtDate, fmtTime, isoWeekday, startOfMonth, startOfWeek, today, WEEKDAYS } from '../lib/date'
+import { addDays, addMonths, fmtDate, fmtTime, startOfMonth, startOfWeek, today, weekdayIndex, WEEKDAYS } from '../lib/date'
 import { Button, Field, Input, PageHeader, Sheet } from '../components/ui'
 
 export default function Calendar() {
@@ -29,7 +29,7 @@ export default function Calendar() {
       const end = (e.end_at ?? e.start_at).slice(0, 10)
       for (let d = s; d <= end; d = addDays(d, 1)) get(d).events.push(e)
     }
-    for (const c of cal.data?.due_cards ?? []) if (c.due_date) get(c.due_date).due.push(c)
+    for (const c of cal.data?.due_cards ?? []) if (c.due_at) get(c.due_at).due.push(c)
     return m
   }, [cal.data])
 
@@ -52,7 +52,7 @@ export default function Calendar() {
 
       <div className="px-2 pt-2">
         <div className="grid grid-cols-7 text-center text-[11px] text-slate-400">
-          {WEEKDAYS.map((w, i) => <div key={w} className={i === 6 ? 'text-rose-400' : ''}>{w}</div>)}
+          {WEEKDAYS.map((w, i) => <div key={w} className={i === 0 ? 'text-rose-400' : i === 6 ? 'text-sky-400' : ''}>{w}</div>)}
         </div>
         <div className="mt-1 grid grid-cols-7 gap-y-1">
           {days.map((d) => {
@@ -66,7 +66,7 @@ export default function Calendar() {
                 onClick={() => setSelected(d)}
                 className={`flex h-14 flex-col items-center rounded-xl pt-1 ${isSel ? 'bg-slate-900 text-white' : inMonth ? 'text-slate-800' : 'text-slate-300'}`}
               >
-                <span className={`flex h-6 w-6 items-center justify-center rounded-full text-sm ${isToday && !isSel ? 'bg-slate-200 font-bold' : ''} ${isoWeekday(d) === 6 && !isSel && inMonth ? 'text-rose-500' : ''}`}>
+                <span className={`flex h-6 w-6 items-center justify-center rounded-full text-sm ${isToday && !isSel ? 'bg-slate-200 font-bold' : ''} ${weekdayIndex(d) === 0 && !isSel && inMonth ? 'text-rose-500' : weekdayIndex(d) === 6 && !isSel && inMonth ? 'text-sky-600' : ''}`}>
                   {Number(d.slice(8))}
                 </span>
                 <span className="mt-0.5 flex gap-0.5">

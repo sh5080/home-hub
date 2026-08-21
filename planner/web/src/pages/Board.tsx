@@ -2,18 +2,33 @@ import { useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router'
 import { useQueryClient } from '@tanstack/react-query'
 import {
-  DndContext, DragOverlay, PointerSensor, useSensor, useSensors, useDroppable, closestCorners,
-  type DragEndEvent, type DragStartEvent,
+  DndContext, DragOverlay, PointerSensor, useSensor, useSensors, useDroppable,
+  pointerWithin, rectIntersection, getFirstCollision,
+  type CollisionDetection, type DragEndEvent, type DragStartEvent,
 } from '@dnd-kit/core'
 import { SortableContext, useSortable, verticalListSortingStrategy, arrayMove } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import { api, type BoardDetail, type Card, type Column } from '../api'
 import { useBoard, useBoards, useInvalidating, useUsers } from '../lib/hooks'
-import { dueLabel, today } from '../lib/date'
-import { Avatar, Button, Field, Input, PageHeader, Sheet, Textarea } from '../components/ui'
+import { fmtDue, today } from '../lib/date'
+import { Avatar, Button, Input, PageHeader, Sheet } from '../components/ui'
+import SortToggle, { Stars } from '../components/SortToggle'
+import type { SortMode } from '../lib/hooks'
+
+// 손가락(포인터)이 실제로 어느 영역 안에 있는지로 판정한다.
+// closestCorners는 끌고 있는 카드의 모서리와 후보들의 거리를 재는데, 컬럼이
+// 세로로 같은 높이라 손가락이 왼쪽 컬럼 위에 있어도 다른 컬럼이 더 가깝게
+// 계산되는 일이 생긴다. pointerWithin이 이 배치에 맞다.
+// 포인터가 어느 영역에도 안 걸칠 때(컬럼 사이 여백)만 사각형 교차로 떨어진다.
+const collisionDetection: CollisionDetection = (args) => {
+  const pointer = pointerWithin(args)
+  if (getFirstCollision(pointer)) return pointer
+  return rectIntersection(args)
+}
 
 const LAST_BOARD_KEY = 'planner.lastBoard'
 const VIEW_KEY = 'planner.boardView'
+const SORT_KEY = 'planner.boardSort'
 type View = 'kanban' | 'backlog'
 
 // 할 일 탭은 목록이 아니라 바로 칸반/백로그다. /boards 는 마지막에 본 보드(없으면 첫 보드).
@@ -50,27 +65,33 @@ function NoBoards() {
   )
 }
 
-type CardBody = { title: string; description: string; due_date: string; assignee_id: number }
-
 function Kanban({ id, onSwitch }: { id: number; onSwitch: (id: number) => void }) {
   const qc = useQueryClient()
   const boards = useBoards()
-  const board = useBoard(id)
+  const [sort, setSortState] = useState<SortMode>(() => {
+    try { return (localStorage.getItem(SORT_KEY) as SortMode) || 'manual' } catch { return 'manual' }
+  })
+  const setSort = (m: SortMode) => { setSortState(m); try { localStorage.setItem(SORT_KEY, m) } catch { /* ignore */ } }
+  // 정렬이 켜져 있으면 서버가 매번 다시 정렬하므로 드래그로 바꾼 순서가 남지 않는다.
+  const canReorder = sort === 'manual'
+  const board = useBoard(id, sort)
   const users = useUsers()
-  const [editing, setEditing] = useState<Card | null>(null)
+  const nav = useNavigate()
   const [adding, setAdding] = useState<Column | null>(null)
   const [menu, setMenu] = useState(false)
   const [switcher, setSwitcher] = useState(false)
   const [dragging, setDragging] = useState<Card | null>(null)
+  // 펼친 컬럼. null이면 균등 분할. 좁은 화면에서 3분할은 카드가 답답해서
+  // 한 컬럼만 크게 보는 모드를 둔다.
+  const [expanded, setExpanded] = useState<number | null>(null)
   const [view, setViewState] = useState<View>(() => {
     try { return (localStorage.getItem(VIEW_KEY) as View) || 'kanban' } catch { return 'kanban' }
   })
   const setView = (v: View) => { setViewState(v); try { localStorage.setItem(VIEW_KEY, v) } catch { /* ignore */ } }
 
   const keys = [['board', id], ['boards'], ['calendar'], ['today']]
-  const addCard = useInvalidating(({ col, ...body }: { col: number } & CardBody) => api.post(`/api/columns/${col}/cards`, body), keys)
+  const addCard = useInvalidating(({ col, title }: { col: number; title: string }) => api.post<Card>(`/api/columns/${col}/cards`, { title }), keys)
   const patchCard = useInvalidating(({ cardId, ...body }: { cardId: number } & Record<string, unknown>) => api.patch(`/api/cards/${cardId}`, body), keys)
-  const delCard = useInvalidating((cardId: number) => api.del(`/api/cards/${cardId}`), keys)
   const addColumn = useInvalidating((name: string) => api.post(`/api/boards/${id}/columns`, { name }), keys)
   const renameBoard = useInvalidating((name: string) => api.patch(`/api/boards/${id}`, { name }), keys)
   const delBoard = useInvalidating(() => api.del(`/api/boards/${id}`), [['boards'], ['today']])
@@ -122,7 +143,10 @@ function Kanban({ id, onSwitch }: { id: number; onSwitch: (id: number) => void }
       toIndex = dst.index
     }
     if (!toCol) return
-    if (toCol.id === src.col.id && toIndex === src.index) return
+    if (toCol.id === src.col.id) {
+      // 정렬이 켜져 있으면 같은 컬럼 안 순서 변경은 남지 않는다 — 무시한다.
+      if (!canReorder || toIndex === src.index) return
+    }
 
     // 낙관적 갱신: 서버와 같은 splice 의미론으로 로컬 상태를 먼저 바꾼다.
     // 같은 컬럼이면 arrayMove가 곧 최종 인덱스 = 서버의 newPos.
@@ -158,9 +182,9 @@ function Kanban({ id, onSwitch }: { id: number; onSwitch: (id: number) => void }
         }
       />
 
-      {/* 칸반 / 백로그 전환 */}
-      <div className="px-4 pt-2">
-        <div className="flex rounded-xl bg-slate-200 p-0.5 text-sm font-medium">
+      {/* 칸반 / 백로그 + 정렬 */}
+      <div className="flex items-center gap-2 px-4 pt-2">
+        <div className="flex flex-1 rounded-xl bg-slate-200 p-0.5 text-sm font-medium">
           {(['kanban', 'backlog'] as const).map((v) => (
             <button
               key={v}
@@ -171,10 +195,14 @@ function Kanban({ id, onSwitch }: { id: number; onSwitch: (id: number) => void }
             </button>
           ))}
         </div>
+        <SortToggle value={sort} onChange={setSort} />
       </div>
+      {!canReorder && (
+        <p className="px-4 pt-1.5 text-[11px] text-slate-400">정렬 중에는 카드를 끌어 순서를 바꿀 수 없어요 · 수동으로 바꾸면 가능</p>
+      )}
 
       {view === 'kanban' ? (
-        <DndContext sensors={sensors} collisionDetection={closestCorners} onDragStart={onDragStart} onDragEnd={onDragEnd} onDragCancel={() => setDragging(null)}>
+        <DndContext sensors={sensors} collisionDetection={collisionDetection} onDragStart={onDragStart} onDragEnd={onDragEnd} onDragCancel={() => setDragging(null)}>
           {/* 컬럼을 한 화면에 나란히. 3개면 3분할, 5개 이상이면 가로 스크롤. */}
           <div className="flex flex-1 gap-2 overflow-x-auto px-2 py-3">
             {columns.map((col) => (
@@ -182,9 +210,12 @@ function Kanban({ id, onSwitch }: { id: number; onSwitch: (id: number) => void }
                 key={col.id}
                 col={col}
                 narrow={columns.length >= 3}
+                collapsed={expanded !== null && expanded !== col.id}
+                expanded={expanded === col.id}
+                onToggleExpand={() => setExpanded(expanded === col.id ? null : col.id)}
                 userName={userName}
                 onAdd={() => setAdding(col)}
-                onOpen={setEditing}
+                onOpen={(c) => nav(`/cards/${c.id}`)}
               />
             ))}
           </div>
@@ -193,35 +224,16 @@ function Kanban({ id, onSwitch }: { id: number; onSwitch: (id: number) => void }
           </DragOverlay>
         </DndContext>
       ) : (
-        <Backlog columns={columns} userName={userName} onAdd={() => setAdding(columns[0])} onOpen={setEditing} />
+        <Backlog columns={columns} userName={userName} onAdd={() => setAdding(columns[0])} onOpen={(c) => nav(`/cards/${c.id}`)} />
       )}
 
-      {/* 카드 추가 */}
+      {/* 카드 추가: 제목만 받고 바로 상세 페이지로 — 나머지는 거기서 채운다 */}
       <Sheet open={!!adding} onClose={() => setAdding(null)} title={adding ? `${adding.name}에 추가` : ''}>
-        {adding && (
-          <CardForm
-            key={`new-${adding.id}`}
-            users={users.data ?? []}
-            onSave={(body) => { addCard.mutate({ col: adding.id, ...body }); setAdding(null) }}
-            onClose={() => setAdding(null)}
-          />
-        )}
-      </Sheet>
-
-      {/* 카드 편집 */}
-      <Sheet open={!!editing} onClose={() => setEditing(null)}>
-        {editing && (
-          <CardForm
-            key={editing.id}
-            card={editing}
-            columns={columns}
-            users={users.data ?? []}
-            onSave={(body) => { patchCard.mutate({ cardId: editing.id, ...body }); setEditing(null) }}
-            onMove={(colId, pos) => { patchCard.mutate({ cardId: editing.id, column_id: colId, position: pos }); setEditing(null) }}
-            onDelete={() => { if (confirm('카드를 삭제할까요?')) { delCard.mutate(editing.id); setEditing(null) } }}
-            onClose={() => setEditing(null)}
-          />
-        )}
+        {adding && <QuickAdd colName={adding.name} onSubmit={async (title) => {
+          const c = await addCard.mutateAsync({ col: adding.id, title })
+          setAdding(null)
+          nav(`/cards/${c.id}`)
+        }} onClose={() => setAdding(null)} />}
       </Sheet>
 
       {/* 보드 전환 */}
@@ -280,7 +292,7 @@ function Backlog({ columns, userName, onAdd, onOpen }: { columns: Column[]; user
   const open = columns.slice(0, -1).flatMap((col) => col.cards.map((c) => ({ c, col })))
   const done = last ? last.cards.map((c) => ({ c, col: last })) : []
   open.sort((a, b) => {
-    const ad = a.c.due_date ?? '9999', bd = b.c.due_date ?? '9999'
+    const ad = a.c.due_at ?? '9999', bd = b.c.due_at ?? '9999'
     if (ad !== bd) return ad < bd ? -1 : 1
     return a.col.position - b.col.position || a.c.position - b.c.position
   })
@@ -293,7 +305,8 @@ function Backlog({ columns, userName, onAdd, onOpen }: { columns: Column[]; user
           {c.description && <p className="mt-0.5 truncate text-xs text-slate-400">{c.description}</p>}
           <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
             <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-500">{col.name}</span>
-            {c.due_date && <DueBadge date={c.due_date} />}
+            <Stars n={c.priority} />
+            {c.due_at && <DueBadge due={c.due_at} />}
           </div>
         </div>
         {name && <Avatar name={name} />}
@@ -319,21 +332,58 @@ function Backlog({ columns, userName, onAdd, onOpen }: { columns: Column[]; user
   )
 }
 
-function ColumnView({ col, narrow, userName, onAdd, onOpen }: { col: Column; narrow: boolean; userName: (id: number | null) => string | undefined; onAdd: () => void; onOpen: (c: Card) => void }) {
+function ColumnView({ col, narrow, collapsed, expanded, onToggleExpand, userName, onAdd, onOpen }: {
+  col: Column
+  narrow: boolean
+  collapsed: boolean
+  expanded: boolean
+  onToggleExpand: () => void
+  userName: (id: number | null) => string | undefined
+  onAdd: () => void
+  onOpen: (c: Card) => void
+}) {
   const { setNodeRef, isOver } = useDroppable({ id: `col-${col.id}` })
+
+  // 접힌 컬럼도 드롭 대상으로 남긴다 — 펼친 상태에서 옆 컬럼으로 카드를
+  // 끌어다 놓을 수 있어야 한다.
+  if (collapsed) {
+    return (
+      <button
+        ref={setNodeRef}
+        onClick={onToggleExpand}
+        className={`flex w-11 shrink-0 flex-col items-center gap-2 rounded-2xl py-3 transition-colors ${isOver ? 'bg-slate-300' : 'bg-slate-100'}`}
+      >
+        <span className="rounded-full bg-white px-1.5 text-[11px] font-semibold text-slate-500">{col.cards.length}</span>
+        <span className="text-xs font-bold text-slate-600" style={{ writingMode: 'vertical-rl' }}>
+          {col.name}
+        </span>
+      </button>
+    )
+  }
+
+  const width = expanded ? 'flex-1' : narrow ? 'min-w-[30%] flex-1' : 'min-w-[45%] flex-1'
   return (
     <section
       ref={setNodeRef}
-      className={`flex min-w-0 flex-1 flex-col rounded-2xl transition-colors ${narrow ? 'min-w-[30%]' : 'min-w-[45%]'} sm:min-w-56 ${isOver ? 'bg-slate-200' : 'bg-slate-100'}`}
+      className={`flex min-w-0 flex-col rounded-2xl transition-colors ${width} sm:min-w-56 ${isOver ? 'bg-slate-200' : 'bg-slate-100'}`}
     >
-      <header className="flex items-center justify-between px-2.5 pt-2.5 pb-1.5">
+      {/* 헤더를 누르면 이 컬럼만 크게 — 다시 누르면 균등 분할로 */}
+      <button
+        onClick={onToggleExpand}
+        className="flex items-center justify-between px-2.5 pt-2.5 pb-1.5 active:opacity-60"
+      >
         <h2 className="truncate text-xs font-bold text-slate-700">{col.name}</h2>
-        <span className="ml-1 shrink-0 text-[11px] text-slate-400">{col.cards.length}</span>
-      </header>
+        <span className="ml-1 flex shrink-0 items-center gap-1 text-[11px] text-slate-400">
+          {col.cards.length}
+          <svg viewBox="0 0 24 24" className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+            {expanded ? <path d="M9 4v6H3M15 20v-6h6" /> : <path d="M4 9V3h6M20 15v6h-6" />}
+          </svg>
+        </span>
+      </button>
       <SortableContext items={col.cards.map((c) => `card-${c.id}`)} strategy={verticalListSortingStrategy}>
         <ul className="flex-1 space-y-1.5 overflow-y-auto px-1.5 pb-1">
           {col.cards.map((c) => (
-            <SortableCard key={c.id} card={c} userName={userName} onOpen={onOpen} />
+            <SortableCard key={c.id} card={c} userName={userName} onOpen={onOpen} wide={expanded} />
           ))}
           {col.cards.length === 0 && <li className="h-10" />}
         </ul>
@@ -343,13 +393,14 @@ function ColumnView({ col, narrow, userName, onAdd, onOpen }: { col: Column; nar
   )
 }
 
-function SortableCard({ card, userName, onOpen }: { card: Card; userName: (id: number | null) => string | undefined; onOpen: (c: Card) => void }) {
+function SortableCard({ card, userName, onOpen, wide }: { card: Card; userName: (id: number | null) => string | undefined; onOpen: (c: Card) => void; wide?: boolean }) {
   const { attributes, listeners, setNodeRef, setActivatorNodeRef, transform, transition, isDragging } = useSortable({ id: `card-${card.id}` })
   return (
     <li ref={setNodeRef} style={{ transform: CSS.Transform.toString(transform), transition }} className={isDragging ? 'opacity-30' : ''}>
       <CardTile
         card={card}
         userName={userName}
+        wide={wide}
         onClick={() => onOpen(card)}
         grip={
           <button
@@ -368,15 +419,17 @@ function SortableCard({ card, userName, onOpen }: { card: Card; userName: (id: n
   )
 }
 
-function CardTile({ card, userName, onClick, lifted, grip }: { card: Card; userName: (id: number | null) => string | undefined; onClick?: () => void; lifted?: boolean; grip?: React.ReactNode }) {
+function CardTile({ card, userName, onClick, lifted, grip, wide }: { card: Card; userName: (id: number | null) => string | undefined; onClick?: () => void; lifted?: boolean; grip?: React.ReactNode; wide?: boolean }) {
   const name = card.assignee_id ? userName(card.assignee_id) : undefined
   return (
     <div className={`flex w-full select-none rounded-lg bg-white p-2 ${lifted ? 'rotate-2 shadow-xl ring-2 ring-slate-900/10' : 'shadow-sm'}`}>
       <button onClick={onClick} className="min-w-0 flex-1 text-left active:opacity-70">
-        <p className="text-[13px] font-medium leading-snug break-words">{card.title}</p>
-        {(card.due_date || name) && (
+        <p className={`font-medium leading-snug break-words ${wide ? 'text-sm' : 'text-[13px]'}`}>{card.title}</p>
+        {wide && card.description && <p className="mt-0.5 line-clamp-2 text-xs text-slate-400">{card.description}</p>}
+        {(card.due_at || name || card.priority > 0) && (
           <div className="mt-1.5 flex flex-wrap items-center gap-1">
-            {card.due_date && <DueBadge date={card.due_date} />}
+            <Stars n={card.priority} />
+            {card.due_at && <DueBadge due={card.due_at} />}
             {name && <Avatar name={name} />}
           </div>
         )}
@@ -386,70 +439,27 @@ function CardTile({ card, userName, onClick, lifted, grip }: { card: Card; userN
   )
 }
 
-function DueBadge({ date }: { date: string }) {
-  const overdue = date < today()
-  const isToday = date === today()
+function DueBadge({ due }: { due: string }) {
+  const day = due.slice(0, 10)
+  const overdue = day < today()
+  const isToday = day === today()
   const cls = overdue ? 'bg-rose-100 text-rose-600' : isToday ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-500'
-  return <span className={`rounded px-1 py-0.5 text-[10px] font-medium ${cls}`}>{dueLabel(date)}</span>
+  return <span className={`rounded px-1 py-0.5 text-[10px] font-medium ${cls}`}>{fmtDue(due)}</span>
 }
 
-// 추가(card 없음)와 편집(card 있음) 겸용 폼.
-function CardForm({ card, columns, users, onSave, onMove, onDelete, onClose }: {
-  card?: Card
-  columns?: Column[]
-  users: { id: number; name: string }[]
-  onSave: (body: CardBody) => void
-  onMove?: (colId: number, pos: number) => void
-  onDelete?: () => void
-  onClose: () => void
-}) {
-  const [title, setTitle] = useState(card?.title ?? '')
-  const [desc, setDesc] = useState(card?.description ?? '')
-  const [due, setDue] = useState(card?.due_date ?? '')
-  const [assignee, setAssignee] = useState(card?.assignee_id ?? 0)
-  const dirty = !card || title !== card.title || desc !== card.description || due !== (card.due_date ?? '') || assignee !== (card.assignee_id ?? 0)
-
+// 제목만 받는 빠른 추가. 상세는 카드 페이지에서 채운다.
+function QuickAdd({ colName, onSubmit, onClose }: { colName: string; onSubmit: (title: string) => void; onClose: () => void }) {
+  const [title, setTitle] = useState('')
+  const [busy, setBusy] = useState(false)
   return (
     <form
-      onSubmit={(e) => { e.preventDefault(); if (title.trim()) onSave({ title: title.trim(), description: desc, due_date: due, assignee_id: assignee }) }}
+      onSubmit={(e) => { e.preventDefault(); if (title.trim()) { setBusy(true); onSubmit(title.trim()) } }}
       className="space-y-3"
     >
-      <Input autoFocus={!card} placeholder="할 일" value={title} onChange={(e) => setTitle(e.target.value)} className="text-lg font-semibold" />
-      <Textarea rows={3} placeholder="설명 (선택)" value={desc} onChange={(e) => setDesc(e.target.value)} />
-      {/* 세로로 쌓는다 — iOS date input은 폭이 고정이라 2열 그리드에서 옆 칸을 침범한다 */}
-      <Field label="마감일">
-        <Input type="date" value={due} onChange={(e) => setDue(e.target.value)} />
-      </Field>
-      <Field label="담당">
-        <select value={assignee} onChange={(e) => setAssignee(Number(e.target.value))} className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-base">
-          <option value={0}>없음</option>
-          {users.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
-        </select>
-      </Field>
-
-      {card && columns && onMove && (
-        <Field label="이동">
-          <div className="flex flex-wrap gap-2">
-            {columns.map((c) => (
-              <button
-                key={c.id}
-                type="button"
-                disabled={c.id === card.column_id}
-                onClick={() => onMove(c.id, c.cards.length)}
-                className="rounded-lg bg-slate-100 px-3 py-1.5 text-sm font-medium text-slate-700 disabled:bg-slate-900 disabled:text-white"
-              >
-                {c.name}
-              </button>
-            ))}
-          </div>
-        </Field>
-      )}
-
-      <div className="flex gap-2 pt-1">
-        {onDelete && <Button type="button" variant="danger" onClick={onDelete}>삭제</Button>}
-        <div className="flex-1" />
-        <Button type="button" variant="ghost" onClick={onClose}>닫기</Button>
-        <Button type="submit" disabled={!dirty || !title.trim()}>{card ? '저장' : '추가'}</Button>
+      <Input autoFocus placeholder={`${colName}에 추가할 일`} value={title} onChange={(e) => setTitle(e.target.value)} className="text-lg font-semibold" />
+      <div className="flex justify-end gap-2">
+        <Button type="button" variant="ghost" onClick={onClose}>취소</Button>
+        <Button type="submit" disabled={!title.trim() || busy}>{busy ? '여는 중…' : '추가하고 열기'}</Button>
       </div>
     </form>
   )

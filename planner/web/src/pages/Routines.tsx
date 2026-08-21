@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { api, type Routine } from '../api'
 import { useInvalidating, useRoutineChecks, useRoutines, useUsers } from '../lib/hooks'
-import { addDays, startOfWeek, today, WEEKDAYS } from '../lib/date'
+import { addDays, maskBit, startOfWeek, today, WEEKDAYS } from '../lib/date'
 import { Avatar, Button, Empty, Field, Input, PageHeader, Sheet } from '../components/ui'
 
 export default function Routines() {
@@ -22,7 +22,8 @@ export default function Routines() {
   const del = useInvalidating((id: number) => api.del(`/api/routines/${id}`), keys)
 
   const isChecked = (r: Routine, d: string) => checks.data?.[String(r.id)]?.includes(d) ?? false
-  const scheduled = (r: Routine, i: number) => (r.weekdays_mask & (1 << i)) !== 0
+  // i는 표시 인덱스(일=0)다 — 저장 마스크 비트(월=0)로 옮겨 본다.
+  const scheduled = (r: Routine, i: number) => (r.weekdays_mask & (1 << maskBit(i))) !== 0
   const active = routines.data?.filter((r) => r.active) ?? []
   const paused = routines.data?.filter((r) => !r.active) ?? []
   const todayStr = today()
@@ -40,43 +41,58 @@ export default function Routines() {
         <button onClick={() => setWeekStart(addDays(weekStart, 7))} className="rounded-lg px-2 py-1 text-slate-500 active:bg-slate-200">›</button>
       </div>
 
-      {/* 그리드: 루틴 × 요일 */}
+      {/* 요일 머리 + 루틴별 카드.
+          좁은 화면에서 제목과 7개 동그라미를 한 줄에 넣으면 제목이 "스..."로
+          잘린다. 제목을 한 줄 주고 체크는 아래에 펼친다. */}
       <div className="px-4 py-3">
-        <div className="grid grid-cols-[1fr_repeat(7,2rem)] items-center gap-y-1 text-center text-[11px] text-slate-400">
-          <div />
-          {days.map((d, i) => (
-            <div key={d} className={d === todayStr ? 'font-bold text-slate-900' : ''}>
-              {WEEKDAYS[i]}<br /><span className="text-[10px]">{Number(d.slice(8))}</span>
-            </div>
-          ))}
-        </div>
-        <ul className="mt-1 space-y-1">
+        <ul className="space-y-2">
           {active.map((r) => (
-            <li key={r.id} className="grid grid-cols-[1fr_repeat(7,2rem)] items-center rounded-xl bg-white py-2 pl-3 shadow-sm">
-              <button onClick={() => setEditing(r)} className="flex min-w-0 items-center gap-2 text-left">
-                {r.assignee_id && users.data && <Avatar name={users.data.find((u) => u.id === r.assignee_id)?.name ?? '?'} />}
-                <span className="truncate text-sm font-medium">{r.title}</span>
-                {r.time_of_day && <span className="shrink-0 text-[11px] text-slate-400">{r.time_of_day}</span>}
+            <li key={r.id} className="rounded-2xl bg-white p-3 shadow-sm">
+              <button onClick={() => setEditing(r)} className="flex w-full items-center gap-2 text-left">
+                <span className="min-w-0 flex-1 truncate text-sm font-semibold">{r.title}</span>
+                {r.time_of_day && (
+                  <span className="shrink-0 rounded-md bg-slate-100 px-1.5 py-0.5 text-[11px] font-medium text-slate-500">
+                    {r.time_of_day}
+                  </span>
+                )}
+                {r.assignee_id && users.data && (
+                  <Avatar name={users.data.find((u) => u.id === r.assignee_id)?.name ?? '?'} />
+                )}
               </button>
-              {days.map((d, i) => {
-                const on = scheduled(r, i)
-                const done = isChecked(r, d)
-                return (
-                  <div key={d} className="flex justify-center">
-                    {on ? (
-                      <button
-                        aria-label={`${r.title} ${d}`}
-                        onClick={() => toggle.mutate({ id: r.id, date: d, on: !done })}
-                        className={`h-6 w-6 rounded-full border-2 transition ${done ? 'border-emerald-500 bg-emerald-500' : d < todayStr ? 'border-rose-300' : 'border-slate-300'}`}
-                      >
-                        {done && <svg viewBox="0 0 24 24" className="h-full w-full text-white" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M5 13l4 4L19 7" /></svg>}
-                      </button>
-                    ) : (
-                      <span className="h-1 w-1 rounded-full bg-slate-200" />
-                    )}
-                  </div>
-                )
-              })}
+
+              <div className="mt-2.5 flex justify-between gap-1">
+                {days.map((d, i) => {
+                  const on = scheduled(r, i)
+                  const done = isChecked(r, d)
+                  const isToday = d === todayStr
+                  return (
+                    <div key={d} className="flex min-w-0 flex-1 flex-col items-center gap-1">
+                      <span className={`text-[10px] ${isToday ? 'font-bold text-slate-900' : i === 0 ? 'text-rose-400' : 'text-slate-400'}`}>
+                        {WEEKDAYS[i]}
+                      </span>
+                      {on ? (
+                        <button
+                          aria-label={`${r.title} ${d}`}
+                          onClick={() => toggle.mutate({ id: r.id, date: d, on: !done })}
+                          className={`flex h-7 w-7 items-center justify-center rounded-full border-2 transition ${
+                            done ? 'border-emerald-500 bg-emerald-500' : d < todayStr ? 'border-rose-300' : 'border-slate-300'
+                          } ${isToday ? 'ring-2 ring-slate-900/10' : ''}`}
+                        >
+                          {done && (
+                            <svg viewBox="0 0 24 24" className="h-4 w-4 text-white" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                              <path d="M5 13l4 4L19 7" />
+                            </svg>
+                          )}
+                        </button>
+                      ) : (
+                        <span className="flex h-7 w-7 items-center justify-center">
+                          <span className="h-1 w-1 rounded-full bg-slate-200" />
+                        </span>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
             </li>
           ))}
         </ul>
@@ -122,9 +138,10 @@ function RoutineForm({ routine, users, onSave, onDelete }: { routine: Routine | 
       <Field label="요일">
         <div className="flex gap-1">
           {WEEKDAYS.map((w, i) => {
-            const on = (mask & (1 << i)) !== 0
+            const bit = 1 << maskBit(i)
+            const on = (mask & bit) !== 0
             return (
-              <button key={w} type="button" onClick={() => setMask(mask ^ (1 << i))} className={`h-9 flex-1 rounded-lg text-sm font-medium ${on ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-500'}`}>{w}</button>
+              <button key={w} type="button" onClick={() => setMask(mask ^ bit)} className={`h-9 flex-1 rounded-lg text-sm font-medium ${on ? 'bg-slate-900 text-white' : i === 0 ? 'bg-slate-100 text-rose-400' : 'bg-slate-100 text-slate-500'}`}>{w}</button>
             )
           })}
         </div>

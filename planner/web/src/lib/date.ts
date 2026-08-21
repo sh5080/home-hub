@@ -31,14 +31,33 @@ export function addDays(s: string, n: number) {
   return toDateStr(d)
 }
 
-/** ISO 요일 인덱스: 월=0 … 일=6 */
+/**
+ * 저장 형식과 표시 순서가 다르다.
+ *
+ *   저장(루틴 weekdays_mask): ISO — bit0=월 … bit6=일
+ *   표시: 일월화수목금토 — 한국 달력 관행
+ *
+ * 마스크를 바꾸면 기존 데이터를 마이그레이션해야 하므로 표시만 돌린다.
+ */
+
+/** ISO 요일 인덱스: 월=0 … 일=6. 저장 마스크의 비트 번호다. */
 export function isoWeekday(s: string) {
   return (fromDateStr(s).getDay() + 6) % 7
 }
 
-/** 그 주 월요일 */
+/** 표시 요일 인덱스: 일=0 … 토=6. JS getDay()와 같다. */
+export function weekdayIndex(s: string) {
+  return fromDateStr(s).getDay()
+}
+
+/** 표시 인덱스(일=0) → 저장 마스크 비트(월=0) */
+export function maskBit(displayIndex: number) {
+  return displayIndex === 0 ? 6 : displayIndex - 1
+}
+
+/** 그 주 일요일 */
 export function startOfWeek(s: string) {
-  return addDays(s, -isoWeekday(s))
+  return addDays(s, -weekdayIndex(s))
 }
 
 /** 그 달 1일 */
@@ -52,17 +71,36 @@ export function addMonths(s: string, n: number) {
   return toDateStr(d)
 }
 
-export const WEEKDAYS = ['월', '화', '수', '목', '금', '토', '일']
+/** 표시 순서. 인덱스는 weekdayIndex()(일=0)와 맞춘다. */
+export const WEEKDAYS = ['일', '월', '화', '수', '목', '금', '토']
 
 /** '2026-09-21' → '9월 21일 (월)' */
 export function fmtDate(s: string) {
   const d = fromDateStr(s)
-  return `${d.getMonth() + 1}월 ${d.getDate()}일 (${WEEKDAYS[isoWeekday(s)]})`
+  return `${d.getMonth() + 1}월 ${d.getDate()}일 (${WEEKDAYS[weekdayIndex(s)]})`
 }
 
 /** '2026-09-21T10:30' → '10:30', '2026-09-21' → '' */
 export function fmtTime(s: string) {
   return s.length > 10 ? s.slice(11, 16) : ''
+}
+
+/** 마감 값에 시각이 들어 있나 */
+export function hasTime(s: string) {
+  return s.length > 10
+}
+
+/** 시각을 오전/오후로 태깅. 정확한 시:분은 상세 페이지에서만 보여준다. */
+export function ampm(s: string) {
+  if (!hasTime(s)) return ''
+  return Number(s.slice(11, 13)) < 12 ? '오전' : '오후'
+}
+
+/** 목록에 쓰는 마감 표기: "내일 오후" 처럼 날짜 + 오전/오후 */
+export function fmtDue(s: string) {
+  const label = dueLabel(s)
+  const t = ampm(s)
+  return t ? `${label} ${t}` : label
 }
 
 /** 마감일 상대 표기 */
