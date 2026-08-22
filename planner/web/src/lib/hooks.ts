@@ -13,8 +13,10 @@ export function useBoards() {
   return useQuery({ queryKey: ['boards'], queryFn: () => api.get<Board[]>('/api/boards') })
 }
 
-export function useBoard(id: number) {
-  return useQuery({ queryKey: ['board', id], queryFn: () => api.get<BoardDetail>(`/api/boards/${id}`) })
+export type SortMode = 'manual' | 'time' | 'priority'
+
+export function useBoard(id: number, sort: SortMode = 'manual') {
+  return useQuery({ queryKey: ['board', id, sort], queryFn: () => api.get<BoardDetail>(`/api/boards/${id}?sort=${sort}`) })
 }
 
 export function useRoutinesForDate(date: string) {
@@ -26,8 +28,8 @@ export interface TodayData {
   cards: (import('../api').Card & { board_id: number; board_name: string; done_column_id: number })[]
 }
 
-export function useToday(date: string) {
-  return useQuery({ queryKey: ['today', date], queryFn: () => api.get<TodayData>(`/api/today?date=${date}`) })
+export function useToday(date: string, sort: SortMode = 'time') {
+  return useQuery({ queryKey: ['today', date, sort], queryFn: () => api.get<TodayData>(`/api/today?date=${date}&sort=${sort}`) })
 }
 
 export function useRoutines() {

@@ -69,9 +69,15 @@ export interface Card {
   id: number
   column_id: number
   title: string
+  /** content에서 파생한 평문. 미리보기·검색용이고 쓰기는 content로 한다. */
   description: string
+  /** 권위 있는 본문. 블록 문서 JSON 문자열. 아직 옮기지 않았으면 null. */
+  content: string | null
   position: number
-  due_date: string | null
+  /** 'YYYY-MM-DD' 또는 'YYYY-MM-DDTHH:MM'. 시각은 선택이다. */
+  due_at: string | null
+  /** 0=없음, 1~3 */
+  priority: number
   assignee_id: number | null
   created_by: number
   updated_at: number

@@ -7,6 +7,7 @@ import Dashboard from './pages/Dashboard'
 import Board from './pages/Board'
 import Calendar from './pages/Calendar'
 import Routines from './pages/Routines'
+import CardPage from './pages/CardPage'
 
 export default function App() {
   return (
@@ -17,6 +18,7 @@ export default function App() {
           <Route index element={<Dashboard />} />
           <Route path="boards" element={<Board />} />
           <Route path="boards/:id" element={<Board />} />
+          <Route path="cards/:id" element={<CardPage />} />
           <Route path="calendar" element={<Calendar />} />
           <Route path="routines" element={<Routines />} />
         </Route>
