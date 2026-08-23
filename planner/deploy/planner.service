@@ -10,7 +10,7 @@
 # 바이너리는 Mac에서 크로스컴파일해서 올린다 (make deploy). Pi에서 빌드하지 않는다.
 
 [Unit]
-Description=family planner (kanban / calendar / routines)
+Description=danah family planner (kanban / calendar / routines)
 Documentation=https://github.com/sh5080/home-hub
 After=network-online.target
 Wants=network-online.target

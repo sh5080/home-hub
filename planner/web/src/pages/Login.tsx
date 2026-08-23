@@ -29,7 +29,7 @@ export default function Login() {
   return (
     <div className="flex min-h-full flex-col justify-center bg-slate-900 px-6 py-12 text-white">
       <div className="mx-auto w-full max-w-sm">
-        <h1 className="text-3xl font-bold tracking-tight">가족 플래너</h1>
+        <h1 className="text-3xl font-bold tracking-tight">단아네 플래너</h1>
         <p className="mt-2 text-slate-400">칸반 · 캘린더 · 주간 루틴</p>
 
         <form onSubmit={submit} className="mt-10 space-y-4">
@@ -64,6 +64,12 @@ export default function Login() {
             {busy ? '확인 중…' : '들어가기'}
           </button>
         </form>
+
+        {/* 이메일 발송 경로가 없다. 되찾기는 가족이 대신 해준다. */}
+        <p className="mt-6 text-center text-xs leading-relaxed text-slate-500">
+          비밀번호를 잊었다면 다른 가족에게 부탁하세요.<br />
+          설정 → 가족 → 비밀번호 재설정
+        </p>
       </div>
     </div>
   )
