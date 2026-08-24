@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/sh5080/home-hub/planner/internal/notion"
 	"github.com/sh5080/home-hub/planner/internal/store"
@@ -35,6 +36,8 @@ func cmdImport(args []string) error {
 		return err
 	}
 
+	// 칸반과 캘린더가 같은 데이터를 보는 뷰이므로 일정도 카드로 들어간다.
+	// 노션의 '선택'(일정/할일)은 어느 컬럼에 놓을지에만 쓴다.
 	var events, todos []notion.Item
 	for _, it := range ex.Items {
 		if it.Kind == notion.KindEvent {
@@ -45,7 +48,7 @@ func cmdImport(args []string) error {
 	}
 
 	fmt.Printf("%s\n\n", zipPath)
-	fmt.Printf("  일정   %3d건 → events\n", len(events))
+	fmt.Printf("  일정   %3d건 → 보드 %q (지난 것은 마지막 컬럼)\n", len(events), *board)
 	fmt.Printf("  할 일  %3d건 → 보드 %q 의 첫 컬럼\n", len(todos), *board)
 	withBody := 0
 	for _, it := range ex.Items {
@@ -153,22 +156,33 @@ func cmdImport(args []string) error {
 		okCards++
 	}
 
+	lastCol := detail.Columns[len(detail.Columns)-1].ID
+	todayStr := time.Now().Format("2006-01-02")
 	for _, it := range events {
+		if existing[it.Title] {
+			dup++
+			continue
+		}
+		// 지난 일정을 첫 컬럼에 넣으면 '연체된 할 일'로 보인다 — 날짜로 가른다.
+		col := firstCol
+		if it.Start < todayStr {
+			col = lastCol
+		}
 		content := buildBody(it)
-		in := store.EventInput{Title: &it.Title, StartAt: &it.Start, AllDay: &it.AllDay}
+		in := store.CardInput{Title: &it.Title, DueAt: &it.Start}
 		if it.End != "" {
 			in.EndAt = &it.End
 		}
 		if content != "" {
 			in.Content = &content
 		}
-		if _, err := st.CreateEvent(ctx, in, by); err != nil {
+		if _, err := st.CreateCard(ctx, col, in, by); err != nil {
 			return fmt.Errorf("일정 %q: %w", it.Title, err)
 		}
 		okEvents++
 	}
 
-	fmt.Printf("\n완료 — 카드 %d, 일정 %d", okCards, okEvents)
+	fmt.Printf("\n완료 — 할 일 %d, 일정 %d (모두 카드)", okCards, okEvents)
 	if dup > 0 {
 		fmt.Printf(", 이미 있어 건너뜀 %d", dup)
 	}

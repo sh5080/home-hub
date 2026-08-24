@@ -76,6 +76,8 @@ export interface Card {
   position: number
   /** 'YYYY-MM-DD' 또는 'YYYY-MM-DDTHH:MM'. 시각은 선택이다. */
   due_at: string | null
+  /** 여러 날에 걸치는 항목의 끝. 없으면 하루짜리. */
+  end_at: string | null
   /** 0=없음, 1~3 */
   priority: number
   assignee_id: number | null
@@ -96,14 +98,6 @@ export interface BoardDetail {
   columns: Column[]
 }
 
-export interface Event {
-  id: number
-  title: string
-  start_at: string
-  end_at: string | null
-  all_day: boolean
-  created_by: number
-}
 
 export interface Routine {
   id: number

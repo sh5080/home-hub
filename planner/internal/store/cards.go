@@ -14,6 +14,7 @@ type CardInput struct {
 	Title      *string
 	Content    *string // 블록 문서 JSON. description은 여기서 파생한다.
 	DueAt      *string // "" clears. 'YYYY-MM-DD' 또는 'YYYY-MM-DDTHH:MM'
+	EndAt      *string // "" clears. 여러 날에 걸치는 항목의 끝
 	AssigneeID *int64  // 0 clears
 	Priority   *int    // 0=없음, 1~3
 }
@@ -59,6 +60,19 @@ func (s *Store) CreateCard(ctx context.Context, columnID int64, in CardInput, by
 		}
 		due = in.DueAt
 	}
+	var end *string
+	if in.EndAt != nil && *in.EndAt != "" {
+		if !validDue(*in.EndAt) {
+			return Card{}, invalid("끝은 YYYY-MM-DD 또는 YYYY-MM-DDTHH:MM 형식이어야 해요")
+		}
+		if due == nil {
+			return Card{}, invalid("끝만 있고 시작이 없어요")
+		}
+		if *in.EndAt < *due {
+			return Card{}, invalid("끝이 시작보다 빨라요")
+		}
+		end = in.EndAt
+	}
 	priority := 0
 	if in.Priority != nil {
 		priority = clampPriority(*in.Priority)
@@ -87,9 +101,9 @@ func (s *Store) CreateCard(ctx context.Context, columnID int64, in CardInput, by
 	}
 	now := time.Now().Unix()
 	res, err := tx.ExecContext(ctx, `
-		INSERT INTO cards (column_id, title, description, content, position, due_at, priority, assignee_id, created_by, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		columnID, title, desc, content, pos, due, priority, assignee, by, now, now)
+		INSERT INTO cards (column_id, title, description, content, position, due_at, end_at, priority, assignee_id, created_by, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		columnID, title, desc, content, pos, due, end, priority, assignee, by, now, now)
 	if err != nil {
 		return Card{}, err
 	}
@@ -98,7 +112,7 @@ func (s *Store) CreateCard(ctx context.Context, columnID int64, in CardInput, by
 		return Card{}, err
 	}
 	return Card{ID: id, ColumnID: columnID, Title: title, Description: desc, Content: content, Position: pos,
-		DueAt: due, Priority: priority, AssigneeID: assignee, CreatedBy: by, CreatedAt: now, UpdatedAt: now}, nil
+		DueAt: due, EndAt: end, Priority: priority, AssigneeID: assignee, CreatedBy: by, CreatedAt: now, UpdatedAt: now}, nil
 }
 
 // UpdateCard patches the named fields.
@@ -132,6 +146,17 @@ func (s *Store) UpdateCard(ctx context.Context, id int64, in CardInput) (Card, e
 			args = append(args, *in.DueAt)
 		}
 	}
+	if in.EndAt != nil {
+		if *in.EndAt == "" {
+			sets = append(sets, "end_at=NULL")
+		} else {
+			if !validDue(*in.EndAt) {
+				return Card{}, invalid("끝은 YYYY-MM-DD 또는 YYYY-MM-DDTHH:MM 형식이어야 해요")
+			}
+			sets = append(sets, "end_at=?")
+			args = append(args, *in.EndAt)
+		}
+	}
 	if in.Priority != nil {
 		sets = append(sets, "priority=?")
 		args = append(args, clampPriority(*in.Priority))
@@ -163,9 +188,9 @@ func (s *Store) UpdateCard(ctx context.Context, id int64, in CardInput) (Card, e
 func (s *Store) GetCard(ctx context.Context, id int64) (Card, error) {
 	var c Card
 	err := s.db.QueryRowContext(ctx, `
-		SELECT id, column_id, title, description, content, position, due_at, priority, assignee_id, created_by, created_at, updated_at
+		SELECT id, column_id, title, description, content, position, due_at, end_at, priority, assignee_id, created_by, created_at, updated_at
 		FROM cards WHERE id=?`, id).
-		Scan(&c.ID, &c.ColumnID, &c.Title, &c.Description, &c.Content, &c.Position, &c.DueAt, &c.Priority, &c.AssigneeID, &c.CreatedBy, &c.CreatedAt, &c.UpdatedAt)
+		Scan(&c.ID, &c.ColumnID, &c.Title, &c.Description, &c.Content, &c.Position, &c.DueAt, &c.EndAt, &c.Priority, &c.AssigneeID, &c.CreatedBy, &c.CreatedAt, &c.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Card{}, ErrNotFound
 	}
@@ -309,11 +334,14 @@ func (s *Store) DeleteCard(ctx context.Context, id int64) error {
 	return tx.Commit()
 }
 
-// DueCards returns cards with a due date in [from, to).
-func (s *Store) DueCards(ctx context.Context, from, to string) ([]Card, error) {
+// CalendarCards returns cards whose date range overlaps [from, to).
+// 끝이 없으면 시작 하루짜리로 본다. 여러 날 항목이 창 중간에서 시작해도 잡힌다.
+func (s *Store) CalendarCards(ctx context.Context, from, to string) ([]Card, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, column_id, title, description, content, position, due_at, priority, assignee_id, created_by, created_at, updated_at
-		FROM cards WHERE due_at >= ? AND due_at < ? ORDER BY due_at, id`, from, to)
+		SELECT id, column_id, title, description, content, position, due_at, end_at, priority, assignee_id, created_by, created_at, updated_at
+		FROM cards
+		WHERE due_at IS NOT NULL AND due_at < ? AND COALESCE(end_at, due_at) >= ?
+		ORDER BY due_at, id`, to, from)
 	if err != nil {
 		return nil, err
 	}
@@ -321,7 +349,7 @@ func (s *Store) DueCards(ctx context.Context, from, to string) ([]Card, error) {
 	out := []Card{}
 	for rows.Next() {
 		var c Card
-		if err := rows.Scan(&c.ID, &c.ColumnID, &c.Title, &c.Description, &c.Content, &c.Position, &c.DueAt, &c.Priority, &c.AssigneeID, &c.CreatedBy, &c.CreatedAt, &c.UpdatedAt); err != nil {
+		if err := rows.Scan(&c.ID, &c.ColumnID, &c.Title, &c.Description, &c.Content, &c.Position, &c.DueAt, &c.EndAt, &c.Priority, &c.AssigneeID, &c.CreatedBy, &c.CreatedAt, &c.UpdatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, c)
@@ -356,7 +384,7 @@ type TodoCard struct {
 // completion target.
 func (s *Store) TodoCards(ctx context.Context, sortBy Sort) ([]TodoCard, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT c.id, c.column_id, c.title, c.description, c.content, c.position, c.due_at, c.priority, c.assignee_id, c.created_by, c.created_at, c.updated_at,
+		SELECT c.id, c.column_id, c.title, c.description, c.content, c.position, c.due_at, c.end_at, c.priority, c.assignee_id, c.created_by, c.created_at, c.updated_at,
 		       b.id, b.name,
 		       (SELECT id FROM columns d WHERE d.board_id = b.id ORDER BY d.position DESC, d.id DESC LIMIT 1)
 		FROM cards c
@@ -371,7 +399,7 @@ func (s *Store) TodoCards(ctx context.Context, sortBy Sort) ([]TodoCard, error) 
 	out := []TodoCard{}
 	for rows.Next() {
 		var t TodoCard
-		if err := rows.Scan(&t.ID, &t.ColumnID, &t.Title, &t.Description, &t.Content, &t.Position, &t.DueAt, &t.Priority, &t.AssigneeID, &t.CreatedBy, &t.CreatedAt, &t.UpdatedAt,
+		if err := rows.Scan(&t.ID, &t.ColumnID, &t.Title, &t.Description, &t.Content, &t.Position, &t.DueAt, &t.EndAt, &t.Priority, &t.AssigneeID, &t.CreatedBy, &t.CreatedAt, &t.UpdatedAt,
 			&t.BoardID, &t.BoardName, &t.DoneColumnID); err != nil {
 			return nil, err
 		}

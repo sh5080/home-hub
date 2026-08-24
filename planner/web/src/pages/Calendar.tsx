@@ -1,41 +1,74 @@
-import { useMemo, useState } from 'react'
-import { Link } from 'react-router'
-import { api, type Event } from '../api'
-import { useCalendar, useInvalidating } from '../lib/hooks'
-import { addDays, addMonths, fmtDate, fmtTime, startOfMonth, startOfWeek, today, weekdayIndex, WEEKDAYS } from '../lib/date'
-import { Button, Field, Input, PageHeader, Sheet } from '../components/ui'
+import { useEffect, useMemo, useState } from 'react'
+import { useNavigate, useSearchParams } from 'react-router'
+import { api, type Card } from '../api'
+import { useCalendar, useInvalidating, useBoards, useUsers } from '../lib/hooks'
+import { addDays, addMonths, ampm, fmtDate, fmtTime, hasTime, startOfMonth, startOfWeek, today, weekdayIndex, WEEKDAYS } from '../lib/date'
+import { Avatar, Button, Field, Input, PageHeader, Sheet, SkeletonList } from '../components/ui'
+import { Stars } from '../components/SortToggle'
 
+// 캘린더는 별도 데이터가 아니라 **날짜가 있는 카드**를 기간으로 보는 뷰다.
+// 여기서 만든 항목도 카드이므로 칸반에서 그대로 보이고, 반대도 마찬가지다.
 export default function Calendar() {
-  const [month, setMonth] = useState(() => startOfMonth(today()))
-  const [selected, setSelected] = useState(today())
-  const [editing, setEditing] = useState<Event | 'new' | null>(null)
+  const nav = useNavigate()
+  // ?date=YYYY-MM-DD 로 특정 날짜를 열 수 있다 — 홈의 "앞으로 7일"에서 넘어온다.
+  const [params, setParams] = useSearchParams()
+  const linked = params.get('date')
+  const valid = (d: string | null) => !!d && /^\d{4}-\d{2}-\d{2}$/.test(d)
+  const initial = valid(linked) ? linked! : today()
 
-  // 그리드는 그 달 1일이 속한 주의 월요일부터 6주
+  const [month, setMonth] = useState(() => startOfMonth(initial))
+  const [selected, setSelectedState] = useState(initial)
+  const [adding, setAdding] = useState(false)
+
+  // 날짜를 고를 때마다 주소를 갱신하되 히스토리에 쌓지 않는다 — 뒤로가기가
+  // 날짜 선택을 하나씩 되짚는 건 원하는 동작이 아니다.
+  const setSelected = (d: string) => {
+    setSelectedState(d)
+    setParams({ date: d }, { replace: true })
+  }
+
+  // 홈에서 다른 날짜로 다시 들어오면 그 날짜로 옮긴다.
+  useEffect(() => {
+    if (valid(linked) && linked !== selected) {
+      setSelectedState(linked!)
+      setMonth(startOfMonth(linked!))
+    }
+    // linked 만 본다 — selected 를 넣으면 사용자가 고른 날짜를 되돌린다.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [linked])
+
+  // 그리드는 그 달 1일이 속한 주의 일요일부터 6주
   const gridStart = startOfWeek(month)
   const gridEnd = addDays(gridStart, 42)
   const cal = useCalendar(gridStart, gridEnd)
+  const users = useUsers()
+  const boards = useBoards()
 
-  const keys = [['calendar']]
-  const save = useInvalidating(({ id, ...body }: { id?: number } & Record<string, unknown>) =>
-    id ? api.patch(`/api/events/${id}`, body) : api.post('/api/events', body), keys)
-  const del = useInvalidating((id: number) => api.del(`/api/events/${id}`), keys)
+  const create = useInvalidating(
+    ({ col, ...body }: { col: number } & Record<string, unknown>) => api.post<Card>(`/api/columns/${col}/cards`, body),
+    [['calendar'], ['board'], ['boards'], ['today']],
+  )
 
-  // 날짜 → 그날의 항목. 여러 날짜 이벤트는 각 날에 펼친다.
+  // 날짜 → 그날의 카드. 여러 날 항목은 걸치는 날마다 펼친다.
   const byDate = useMemo(() => {
-    const m = new Map<string, { events: Event[]; due: { id: number; title: string }[] }>()
-    const get = (d: string) => { let v = m.get(d); if (!v) { v = { events: [], due: [] }; m.set(d, v) } return v }
-    for (const e of cal.data?.events ?? []) {
-      const s = e.start_at.slice(0, 10)
-      const end = (e.end_at ?? e.start_at).slice(0, 10)
-      for (let d = s; d <= end; d = addDays(d, 1)) get(d).events.push(e)
+    const m = new Map<string, Card[]>()
+    for (const c of cal.data?.cards ?? []) {
+      if (!c.due_at) continue
+      const s = c.due_at.slice(0, 10)
+      const e = (c.end_at ?? c.due_at).slice(0, 10)
+      for (let d = s; d <= e; d = addDays(d, 1)) {
+        const list = m.get(d)
+        if (list) list.push(c)
+        else m.set(d, [c])
+      }
     }
-    for (const c of cal.data?.due_cards ?? []) if (c.due_at) get(c.due_at).due.push(c)
     return m
   }, [cal.data])
 
   const days = Array.from({ length: 42 }, (_, i) => addDays(gridStart, i))
   const monthNum = Number(month.slice(5, 7))
-  const sel = byDate.get(selected)
+  const sel = byDate.get(selected) ?? []
+  const userName = (id: number | null) => users.data?.find((u) => u.id === id)?.name
 
   return (
     <div className="mx-auto max-w-lg">
@@ -51,27 +84,36 @@ export default function Calendar() {
       />
 
       <div className="px-2 pt-2">
+        {/* 점 색이 뭘 뜻하는지 — 두 색뿐이라 오전/오후로 오해하기 쉽다 */}
+        <div className="mb-1.5 flex items-center justify-end gap-3 px-1 text-[10px] text-slate-400">
+          <span className="flex items-center gap-1"><i className="h-1.5 w-1.5 rounded-full bg-sky-500" />시간 약속</span>
+          <span className="flex items-center gap-1"><i className="h-1.5 w-1.5 rounded-full bg-amber-500" />종일</span>
+        </div>
         <div className="grid grid-cols-7 text-center text-[11px] text-slate-400">
-          {WEEKDAYS.map((w, i) => <div key={w} className={i === 0 ? 'text-rose-400' : i === 6 ? 'text-sky-400' : ''}>{w}</div>)}
+          {WEEKDAYS.map((w, i) => (
+            <div key={w} className={i === 0 ? 'text-rose-400' : i === 6 ? 'text-sky-400' : ''}>{w}</div>
+          ))}
         </div>
         <div className="mt-1 grid grid-cols-7 gap-y-1">
           {days.map((d) => {
             const inMonth = Number(d.slice(5, 7)) === monthNum
-            const v = byDate.get(d)
+            const list = byDate.get(d)
             const isSel = d === selected
             const isToday = d === today()
+            const wd = weekdayIndex(d)
             return (
               <button
                 key={d}
                 onClick={() => setSelected(d)}
                 className={`flex h-14 flex-col items-center rounded-xl pt-1 ${isSel ? 'bg-slate-900 text-white' : inMonth ? 'text-slate-800' : 'text-slate-300'}`}
               >
-                <span className={`flex h-6 w-6 items-center justify-center rounded-full text-sm ${isToday && !isSel ? 'bg-slate-200 font-bold' : ''} ${weekdayIndex(d) === 0 && !isSel && inMonth ? 'text-rose-500' : weekdayIndex(d) === 6 && !isSel && inMonth ? 'text-sky-600' : ''}`}>
+                <span className={`flex h-6 w-6 items-center justify-center rounded-full text-sm ${isToday && !isSel ? 'bg-slate-200 font-bold' : ''} ${!isSel && inMonth ? (wd === 0 ? 'text-rose-500' : wd === 6 ? 'text-sky-600' : '') : ''}`}>
                   {Number(d.slice(8))}
                 </span>
                 <span className="mt-0.5 flex gap-0.5">
-                  {v?.events.slice(0, 3).map((e) => <i key={e.id} className={`h-1.5 w-1.5 rounded-full ${isSel ? 'bg-white' : 'bg-sky-500'}`} />)}
-                  {v?.due.slice(0, 2).map((c) => <i key={c.id} className={`h-1.5 w-1.5 rounded-full ${isSel ? 'bg-white/70' : 'bg-amber-500'}`} />)}
+                  {list?.slice(0, 4).map((c) => (
+                    <i key={c.id} className={`h-1.5 w-1.5 rounded-full ${isSel ? 'bg-white' : hasTime(c.due_at!) ? 'bg-sky-500' : 'bg-amber-500'}`} />
+                  ))}
                 </span>
               </button>
             )
@@ -83,84 +125,91 @@ export default function Calendar() {
       <section className="px-4 pt-4">
         <div className="flex items-center justify-between">
           <h2 className="text-base font-bold">{fmtDate(selected)}</h2>
-          <Button variant="ghost" onClick={() => setEditing('new')}>+ 일정</Button>
+          <Button variant="ghost" onClick={() => setAdding(true)}>+ 추가</Button>
         </div>
         <ul className="mt-2 space-y-2">
-          {sel?.events.map((e) => (
-            <li key={e.id}>
-              <button onClick={() => setEditing(e)} className="flex w-full items-center gap-3 rounded-xl bg-white p-3 text-left shadow-sm">
-                <span className="h-8 w-1 rounded-full bg-sky-500" />
+          {sel.map((c) => (
+            <li key={c.id}>
+              {/* 카드이므로 상세 페이지가 그대로 열린다 */}
+              <button onClick={() => nav(`/cards/${c.id}`)} className="flex w-full items-center gap-3 rounded-xl bg-white p-3 text-left shadow-sm active:bg-slate-50">
+                <span className={`h-8 w-1 shrink-0 rounded-full ${hasTime(c.due_at!) ? 'bg-sky-500' : 'bg-amber-500'}`} />
                 <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-medium">{e.title}</p>
-                  <p className="text-xs text-slate-400">{e.all_day ? '종일' : fmtTime(e.start_at) + (e.end_at ? ` – ${fmtTime(e.end_at)}` : '')}</p>
+                  <p className="truncate text-sm font-medium">{c.title}</p>
+                  <p className="text-xs text-slate-400">
+                    {hasTime(c.due_at!) ? `${ampm(c.due_at!)} ${fmtTime(c.due_at!)}` : '종일'}
+                    {c.end_at && c.end_at.slice(0, 10) !== c.due_at!.slice(0, 10) && ` – ${c.end_at.slice(5, 10).replace('-', '/')}`}
+                  </p>
                 </div>
+                <Stars n={c.priority} />
+                {c.assignee_id && userName(c.assignee_id) && <Avatar name={userName(c.assignee_id)!} />}
               </button>
             </li>
           ))}
-          {sel?.due.map((c) => (
-            <li key={`c${c.id}`}>
-              <Link to={`/boards`} className="flex w-full items-center gap-3 rounded-xl bg-white p-3 shadow-sm">
-                <span className="h-8 w-1 rounded-full bg-amber-500" />
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-medium">{c.title}</p>
-                  <p className="text-xs text-slate-400">마감</p>
-                </div>
-              </Link>
-            </li>
-          ))}
-          {!sel?.events.length && !sel?.due.length && <li className="py-6 text-center text-sm text-slate-400">일정이 없어요</li>}
+          {cal.isPending && <li><SkeletonList rows={2} /></li>}
+          {!cal.isPending && sel.length === 0 && <li className="py-6 text-center text-sm text-slate-400">일정이 없어요</li>}
         </ul>
       </section>
 
-      <Sheet open={editing !== null} onClose={() => setEditing(null)} title={editing === 'new' ? '새 일정' : '일정'}>
-        {editing !== null && (
-          <EventForm
-            key={editing === 'new' ? `new-${selected}` : editing.id}
-            event={editing === 'new' ? null : editing}
-            defaultDate={selected}
-            onSave={(body) => { save.mutate(editing === 'new' ? body : { id: editing.id, ...body }); setEditing(null) }}
-            onDelete={editing === 'new' ? undefined : () => { if (confirm('일정을 삭제할까요?')) { del.mutate(editing.id); setEditing(null) } }}
-          />
-        )}
+      <Sheet open={adding} onClose={() => setAdding(false)} title={`${fmtDate(selected)}에 추가`}>
+        <AddForm
+          date={selected}
+          boardName={boards.data?.[0]?.name}
+          onSubmit={async (body) => {
+            const col = boards.data?.[0]
+            if (!col) return
+            const detail = await api.get<{ columns: { id: number }[] }>(`/api/boards/${col.id}`)
+            const card = await create.mutateAsync({ col: detail.columns[0].id, ...body })
+            setAdding(false)
+            nav(`/cards/${card.id}`)
+          }}
+          onClose={() => setAdding(false)}
+        />
       </Sheet>
     </div>
   )
 }
 
-function EventForm({ event, defaultDate, onSave, onDelete }: { event: Event | null; defaultDate: string; onSave: (b: Record<string, unknown>) => void; onDelete?: () => void }) {
-  const [title, setTitle] = useState(event?.title ?? '')
-  const [allDay, setAllDay] = useState(event?.all_day ?? false)
-  // 종일이면 date, 아니면 datetime-local. 전환 시 날짜 부분은 유지.
-  const initStart = event?.start_at ?? `${defaultDate}T${nextHour()}`
-  const [start, setStart] = useState(initStart)
-  const [end, setEnd] = useState(event?.end_at ?? '')
+// 캘린더에서 만드는 것도 카드다. 제목과 날짜만 받고 나머지는 카드 페이지에서.
+function AddForm({ date, boardName, onSubmit, onClose }: {
+  date: string
+  boardName?: string
+  onSubmit: (body: Record<string, unknown>) => void
+  onClose: () => void
+}) {
+  const [title, setTitle] = useState('')
+  const [timed, setTimed] = useState(false)
+  const [due, setDue] = useState(date)
+  const [end, setEnd] = useState('')
+  const [busy, setBusy] = useState(false)
 
-  const dateOf = (s: string) => s.slice(0, 10)
-  const switchAllDay = (v: boolean) => {
-    setAllDay(v)
-    setStart(v ? dateOf(start) : `${dateOf(start)}T${nextHour()}`)
-    setEnd(end ? (v ? dateOf(end) : `${dateOf(end)}T${nextHour(1)}`) : '')
+  const toggleTimed = (withTime: boolean) => {
+    setTimed(withTime)
+    setDue(withTime ? `${due.slice(0, 10)}T${nextHour()}` : due.slice(0, 10))
+    if (end) setEnd(withTime ? `${end.slice(0, 10)}T${nextHour(1)}` : end.slice(0, 10))
   }
 
   return (
-    <div className="space-y-3">
-      <Input autoFocus placeholder="제목" value={title} onChange={(e) => setTitle(e.target.value)} />
+    <form
+      onSubmit={(e) => { e.preventDefault(); if (title.trim()) { setBusy(true); onSubmit({ title: title.trim(), due_at: due, end_at: end }) } }}
+      className="space-y-3"
+    >
+      <Input autoFocus placeholder="무엇을 할까요" value={title} onChange={(e) => setTitle(e.target.value)} className="text-lg font-semibold" />
       <label className="flex items-center gap-2 text-sm">
-        <input type="checkbox" checked={allDay} onChange={(e) => switchAllDay(e.target.checked)} className="h-4 w-4" />
-        종일
+        <input type="checkbox" checked={timed} onChange={(e) => toggleTimed(e.target.checked)} className="h-4 w-4" />
+        시간 정하기
       </label>
-      <Field label="시작">
-        <Input type={allDay ? 'date' : 'datetime-local'} value={start} onChange={(e) => setStart(e.target.value)} />
+      <Field label="날짜">
+        <Input type={timed ? 'datetime-local' : 'date'} value={due} onChange={(e) => setDue(e.target.value)} />
       </Field>
-      <Field label="끝 (선택)">
-        <Input type={allDay ? 'date' : 'datetime-local'} value={end} min={start} onChange={(e) => setEnd(e.target.value)} />
+      <Field label="끝 (여러 날에 걸칠 때만)">
+        <Input type={timed ? 'datetime-local' : 'date'} value={end} min={due} onChange={(e) => setEnd(e.target.value)} />
       </Field>
-      <div className="flex gap-2 pt-1">
-        {onDelete && <Button variant="danger" onClick={onDelete}>삭제</Button>}
-        <div className="flex-1" />
-        <Button disabled={!title.trim() || !start} onClick={() => onSave({ title: title.trim(), start_at: start, end_at: end, all_day: allDay })}>저장</Button>
+      {boardName && <p className="text-xs text-slate-400">보드 “{boardName}”의 첫 컬럼에 추가돼요 — 칸반에서도 보입니다.</p>}
+      <div className="flex justify-end gap-2 pt-1">
+        <Button type="button" variant="ghost" onClick={onClose}>취소</Button>
+        <Button type="submit" disabled={!title.trim() || !due || busy}>{busy ? '여는 중…' : '추가하고 열기'}</Button>
       </div>
-    </div>
+    </form>
   )
 }
 
@@ -169,4 +218,3 @@ function nextHour(plus = 0) {
   const h = (new Date().getHours() + 1 + plus) % 24
   return `${h < 10 ? '0' : ''}${h}:00`
 }
-

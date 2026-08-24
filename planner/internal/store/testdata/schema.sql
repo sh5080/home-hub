@@ -16,7 +16,7 @@ CREATE TABLE cards (
   created_by  INTEGER NOT NULL REFERENCES users(id),
   created_at  INTEGER NOT NULL,
   updated_at  INTEGER NOT NULL
-, content TEXT, priority INTEGER NOT NULL DEFAULT 0);
+, content TEXT, priority INTEGER NOT NULL DEFAULT 0, end_at TEXT);
 
 CREATE TABLE columns (
   id       INTEGER PRIMARY KEY,
@@ -24,16 +24,6 @@ CREATE TABLE columns (
   name     TEXT    NOT NULL,
   position INTEGER NOT NULL
 );
-
-CREATE TABLE events (
-  id         INTEGER PRIMARY KEY,
-  title      TEXT    NOT NULL,
-  start_at   TEXT    NOT NULL,   -- 'YYYY-MM-DDTHH:MM', 종일이면 'YYYY-MM-DD'
-  end_at     TEXT,               -- 같은 형식, NULL = 시점/하루
-  all_day    INTEGER NOT NULL DEFAULT 0,
-  created_by INTEGER NOT NULL REFERENCES users(id),
-  created_at INTEGER NOT NULL
-, content TEXT, description TEXT NOT NULL DEFAULT '');
 
 CREATE TABLE login_attempts (
   key          TEXT    PRIMARY KEY,
@@ -79,11 +69,11 @@ CREATE INDEX cards_column ON cards(column_id, position);
 
 CREATE INDEX cards_due ON cards(due_at) WHERE due_at IS NOT NULL;
 
+CREATE INDEX cards_end ON cards(end_at) WHERE end_at IS NOT NULL;
+
 CREATE INDEX cards_priority ON cards(priority);
 
 CREATE INDEX columns_board ON columns(board_id, position);
-
-CREATE INDEX events_start ON events(start_at);
 
 CREATE INDEX login_attempts_locked ON login_attempts(locked_until);
 

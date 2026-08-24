@@ -95,17 +95,14 @@ func TestInjectionPayloadsAreStoredAsData(t *testing.T) {
 		}
 
 		// 범위 쿼리 파라미터
-		if _, err := st.ListEvents(ctx, p, p); err != nil {
-			t.Fatalf("ListEvents(%q): %v", p, err)
-		}
-		if _, err := st.DueCards(ctx, p, p); err != nil {
-			t.Fatalf("DueCards(%q): %v", p, err)
+		if _, err := st.CalendarCards(ctx, p, p); err != nil {
+			t.Fatalf("CalendarCards(%q): %v", p, err)
 		}
 	}
 
 	// 테이블이 전부 살아 있고 행 수가 기대대로인지 — DROP/DELETE가 실행됐다면
 	// 여기서 무너진다.
-	for _, tbl := range []string{"users", "boards", "columns", "cards", "events", "routines", "sessions", "login_attempts", "schema_migrations"} {
+	for _, tbl := range []string{"users", "boards", "columns", "cards", "routines", "sessions", "login_attempts", "schema_migrations"} {
 		var n int
 		if err := st.db.QueryRow(`SELECT count(*) FROM ` + tbl).Scan(&n); err != nil {
 			t.Fatalf("table %s missing or broken: %v", tbl, err)

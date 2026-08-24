@@ -93,6 +93,20 @@ export function Empty({ children }: { children: ReactNode }) {
   return <p className="py-10 text-center text-sm text-slate-400">{children}</p>
 }
 
+/** 목록이 들어올 자리를 미리 차지하는 뼈대. 화면이 덜컥 밀리지 않게 한다. */
+export function SkeletonList({ rows = 3, className = '' }: { rows?: number; className?: string }) {
+  return (
+    <ul className={`space-y-2 ${className}`} aria-hidden>
+      {Array.from({ length: rows }, (_, i) => (
+        <li key={i} className="flex items-center gap-3 rounded-xl bg-white p-3 shadow-sm">
+          <span className="h-6 w-6 shrink-0 animate-pulse rounded-full bg-slate-200" />
+          <span className="h-3 flex-1 animate-pulse rounded bg-slate-200" style={{ maxWidth: `${70 - i * 12}%` }} />
+        </li>
+      ))}
+    </ul>
+  )
+}
+
 /** 담당자 아바타(이름 첫 글자) */
 export function Avatar({ name, size = 'sm' }: { name: string; size?: 'sm' | 'md' }) {
   const s = size === 'sm' ? 'h-6 w-6 text-[11px]' : 'h-8 w-8 text-sm'

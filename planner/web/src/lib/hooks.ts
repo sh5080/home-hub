@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { api, type Board, type BoardDetail, type Event, type Routine, type User } from '../api'
+import { api, type Board, type BoardDetail, type Card, type Routine, type User } from '../api'
 
 export function useMe() {
   return useQuery({ queryKey: ['me'], queryFn: () => api.get<User>('/api/me'), staleTime: Infinity })
@@ -25,7 +25,7 @@ export function useRoutinesForDate(date: string) {
 
 export interface TodayData {
   routines: Routine[]
-  cards: (import('../api').Card & { board_id: number; board_name: string; done_column_id: number })[]
+  cards: (Card & { board_id: number; board_name: string; done_column_id: number })[]
 }
 
 export function useToday(date: string, sort: SortMode = 'time') {
@@ -43,9 +43,9 @@ export function useRoutineChecks(from: string, to: string) {
   })
 }
 
+/** 캘린더는 별도 데이터가 아니라 날짜가 있는 카드를 기간으로 본 것이다. */
 export interface CalendarData {
-  events: Event[]
-  due_cards: import('../api').Card[]
+  cards: Card[]
 }
 
 export function useCalendar(from: string, to: string) {

@@ -56,7 +56,7 @@ func TestDatetimeDueStillMatchesDateRange(t *testing.T) {
 	if _, err := st.CreateCard(ctx, cols[0], CardInput{Title: &title, DueAt: &due}, by); err != nil {
 		t.Fatal(err)
 	}
-	got, err := st.DueCards(ctx, "2026-09-23", "2026-09-24")
+	got, err := st.CalendarCards(ctx, "2026-09-23", "2026-09-24")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +64,7 @@ func TestDatetimeDueStillMatchesDateRange(t *testing.T) {
 		t.Fatalf("시각 있는 마감이 날짜 범위에 안 잡힘: %+v", got)
 	}
 	// 하루 전 범위에는 안 잡혀야 한다.
-	if got, _ := st.DueCards(ctx, "2026-09-22", "2026-09-23"); len(got) != 0 {
+	if got, _ := st.CalendarCards(ctx, "2026-09-22", "2026-09-23"); len(got) != 0 {
 		t.Fatalf("범위 밖인데 잡힘: %+v", got)
 	}
 }

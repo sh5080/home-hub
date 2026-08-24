@@ -3,10 +3,10 @@ import { Link, useNavigate } from 'react-router'
 import { useQueryClient } from '@tanstack/react-query'
 import { api } from '../api'
 import { useCalendar, useInvalidating, useMe, useToday, useUsers } from '../lib/hooks'
-import { addDays, fmtDate, fmtDue, fmtTime, today, weekdayIndex, WEEKDAYS } from '../lib/date'
+import { addDays, ampm, fmtDate, fmtDue, fmtTime, hasTime, today, weekdayIndex, WEEKDAYS } from '../lib/date'
 import { Avatar, Button, Field, Input, PageHeader, Sheet } from '../components/ui'
 import SortToggle, { Stars } from '../components/SortToggle'
-import type { SortMode } from '../lib/hooks'
+import type { CalendarData, SortMode } from '../lib/hooks'
 
 export default function Dashboard() {
   const me = useMe()
@@ -171,28 +171,36 @@ function TodoRow({ checked, onToggle, title, meta, metaTone, tag, avatar, href, 
   )
 }
 
-function WeekStrip({ data, from }: { data?: { events: { id: number; title: string; start_at: string; end_at: string | null; all_day: boolean }[]; due_cards: { id: number; title: string; due_at: string | null }[] }; from: string }) {
+function WeekStrip({ data, from }: { data?: CalendarData; from: string }) {
   const days = Array.from({ length: 7 }, (_, i) => addDays(from, i))
+  // 캘린더는 날짜가 있는 카드를 본 것이다 — 일정과 할 일이 한 목록이다.
   const items = days.map((d) => ({
     d,
-    events: data?.events.filter((e) => e.start_at.slice(0, 10) <= d && (e.end_at ?? e.start_at).slice(0, 10) >= d) ?? [],
-    due: data?.due_cards.filter((c) => c.due_at === d) ?? [],
-  })).filter((x) => x.events.length || x.due.length)
+    cards: data?.cards.filter((c) => {
+      if (!c.due_at) return false
+      return c.due_at.slice(0, 10) <= d && (c.end_at ?? c.due_at).slice(0, 10) >= d
+    }) ?? [],
+  })).filter((x) => x.cards.length)
 
   if (items.length === 0) return <p className="rounded-xl bg-white p-4 text-center text-sm text-slate-400">이번 주 일정이 없어요</p>
   return (
     <ul className="space-y-2">
-      {items.map(({ d, events, due }) => (
-        <li key={d} className="rounded-xl bg-white p-3 shadow-sm">
-          <p className="mb-1 text-xs font-semibold text-slate-500">
+      {items.map(({ d, cards }) => (
+        <li key={d}>
+          {/* 날짜 칸을 누르면 캘린더의 그 날로 간다 */}
+          <Link to={`/calendar?date=${d}`} className="block rounded-xl bg-white p-3 shadow-sm active:bg-slate-50">
+          <p className="mb-1 flex items-center gap-1 text-xs font-semibold text-slate-500">
             {d === from ? '오늘' : d === addDays(from, 1) ? '내일' : `${WEEKDAYS[weekdayIndex(d)]} ${Number(d.slice(8))}일`}
+            <svg viewBox="0 0 24 24" className="h-3 w-3 text-slate-300" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M9 6l6 6-6 6" /></svg>
           </p>
-          {events.map((e) => (
-            <p key={e.id} className="flex items-center gap-2 text-sm"><i className="h-1.5 w-1.5 rounded-full bg-sky-500" />{e.title}{!e.all_day && <span className="text-xs text-slate-400">{fmtTime(e.start_at)}</span>}</p>
+          {cards.map((c) => (
+            <p key={c.id} className="flex items-center gap-2 text-sm">
+              <i className={`h-1.5 w-1.5 shrink-0 rounded-full ${hasTime(c.due_at!) ? 'bg-sky-500' : 'bg-amber-500'}`} />
+              <span className="truncate">{c.title}</span>
+              {hasTime(c.due_at!) && <span className="shrink-0 text-xs text-slate-400">{ampm(c.due_at!)} {fmtTime(c.due_at!)}</span>}
+            </p>
           ))}
-          {due.map((c) => (
-            <p key={c.id} className="flex items-center gap-2 text-sm"><i className="h-1.5 w-1.5 rounded-full bg-amber-500" />{c.title}<span className="text-xs text-slate-400">마감</span></p>
-          ))}
+          </Link>
         </li>
       ))}
     </ul>

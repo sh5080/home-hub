@@ -137,31 +137,29 @@ func TestSmoke(t *testing.T) {
 		t.Fatalf("doing column after move = %+v", d.Columns[1].Cards)
 	}
 
-	// calendar sees the due card
+	// 캘린더는 별도 테이블이 아니라 날짜가 있는 카드를 본다.
 	var cal struct {
-		Events   []store.Event `json:"events"`
-		DueCards []store.Card  `json:"due_cards"`
+		Cards []store.Card `json:"cards"`
 	}
 	c.must("GET", "/api/calendar?from=2026-09-01&to=2026-10-01", nil, &cal, 200)
-	if len(cal.DueCards) != 1 || cal.DueCards[0].Title != "장보기" {
-		t.Fatalf("due cards = %+v", cal.DueCards)
+	if len(cal.Cards) != 1 || cal.Cards[0].Title != "장보기" {
+		t.Fatalf("calendar cards = %+v", cal.Cards)
 	}
 
-	// event validation + range
-	var ev store.Event
-	c.must("POST", "/api/events", map[string]any{"title": "병원", "start_at": "2026-09-22T10:30"}, &ev, 201)
-	c.must("POST", "/api/events", map[string]any{"title": "여행", "start_at": "2026-09-27", "end_at": "2026-09-29", "all_day": true}, nil, 201)
-	c.must("POST", "/api/events", map[string]any{"title": "bad", "start_at": "2026-09-27", "all_day": false}, nil, 400) // needs HH:MM
-	c.must("POST", "/api/events", map[string]any{"title": "bad", "start_at": "2026-09-29T10:00", "end_at": "2026-09-28T10:00"}, nil, 400)
-	c.must("GET", "/api/calendar?from=2026-09-22&to=2026-09-23", nil, &cal, 200)
-	if len(cal.Events) != 1 || cal.Events[0].Title != "병원" {
-		t.Fatalf("events on 22nd = %+v", cal.Events)
-	}
-	// multi-day event overlaps a window that starts mid-event
+	// 여러 날 항목: 창 중간에서 시작해도 겹치면 잡힌다.
+	var trip store.Card
+	c.must("POST", "/api/columns/"+itoa(todo)+"/cards",
+		map[string]any{"title": "여행", "due_at": "2026-09-27", "end_at": "2026-09-29"}, &trip, 201)
 	c.must("GET", "/api/calendar?from=2026-09-28&to=2026-09-29", nil, &cal, 200)
-	if len(cal.Events) != 1 || cal.Events[0].Title != "여행" {
-		t.Fatalf("events on 28th = %+v", cal.Events)
+	if len(cal.Cards) != 1 || cal.Cards[0].Title != "여행" {
+		t.Fatalf("multi-day overlap = %+v", cal.Cards)
 	}
+	// 끝이 시작보다 빠르면 거절.
+	c.must("POST", "/api/columns/"+itoa(todo)+"/cards",
+		map[string]any{"title": "bad", "due_at": "2026-09-29", "end_at": "2026-09-28"}, nil, 400)
+	// 시작 없이 끝만 있으면 거절.
+	c.must("POST", "/api/columns/"+itoa(todo)+"/cards",
+		map[string]any{"title": "bad", "end_at": "2026-09-28"}, nil, 400)
 
 	// routines: Mon/Wed/Fri = bits 0,2,4 = 0b10101 = 21. 2026-09-21 is a Monday.
 	var rt store.Routine
@@ -375,3 +373,5 @@ func TestCardDetailAndContent(t *testing.T) {
 	// 없는 카드는 404 JSON.
 	c.must("GET", "/api/cards/99999", nil, nil, 404)
 }
+
+// 변경이 SSE로 흘러나오는지. 이게 깨지면 화면이 조용히 30초 낡은 채로 남는다.

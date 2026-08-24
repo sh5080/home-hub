@@ -43,14 +43,14 @@ func New(st *store.Store, log *slog.Logger, dev bool) http.Handler {
 	authed.HandleFunc("POST /api/users", s.createUser)
 	authed.HandleFunc("POST /api/users/{id}/password", s.setPassword)
 	s.registerBoards(authed)
-	s.registerEvents(authed)
+	s.registerCalendar(authed)
 	s.registerRoutines(authed)
 	authed.HandleFunc("/", notFound) // inner mux must also answer JSON, never the stdlib HTML 404
 	gated := auth.Middleware(st, authed)
 	for _, p := range []string{
 		"/api/logout", "/api/me", "/api/users", "/api/users/",
 		"/api/boards", "/api/boards/", "/api/columns/", "/api/cards/",
-		"/api/events", "/api/events/", "/api/routines", "/api/routines/", "/api/calendar", "/api/today",
+		"/api/routines", "/api/routines/", "/api/calendar", "/api/today",
 	} {
 		mux.Handle(p, gated)
 	}

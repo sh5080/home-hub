@@ -72,6 +72,10 @@ func Open(dir string) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
+	if err := s.backfillEvents(); err != nil {
+		db.Close()
+		return nil, err
+	}
 	if err := s.backfillPriority(); err != nil {
 		db.Close()
 		return nil, err

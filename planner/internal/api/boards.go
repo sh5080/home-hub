@@ -164,6 +164,7 @@ type cardReq struct {
 	Title      *string `json:"title"`
 	Content    *string `json:"content"` // 블록 문서 JSON. description은 서버가 파생한다.
 	DueAt      *string `json:"due_at"`  // 'YYYY-MM-DD' 또는 'YYYY-MM-DDTHH:MM'
+	EndAt      *string `json:"end_at"`  // 여러 날 항목의 끝
 	Priority   *int    `json:"priority"`
 	AssigneeID *int64  `json:"assignee_id"`
 	ColumnID   *int64  `json:"column_id"`
@@ -171,7 +172,7 @@ type cardReq struct {
 }
 
 func (r cardReq) input() store.CardInput {
-	return store.CardInput{Title: r.Title, Content: r.Content, DueAt: r.DueAt, AssigneeID: r.AssigneeID, Priority: r.Priority}
+	return store.CardInput{Title: r.Title, Content: r.Content, DueAt: r.DueAt, EndAt: r.EndAt, AssigneeID: r.AssigneeID, Priority: r.Priority}
 }
 
 func (s *Server) createCard(w http.ResponseWriter, r *http.Request) {

@@ -35,6 +35,7 @@ type Card struct {
 	Content     *string `json:"content"`     // 권위 있는 본문. 블록 문서 JSON
 	Position    int     `json:"position"`
 	DueAt       *string `json:"due_at"`   // 'YYYY-MM-DD' 또는 'YYYY-MM-DDTHH:MM'
+	EndAt       *string `json:"end_at"`   // 여러 날 항목의 끝. 없으면 하루짜리
 	Priority    int     `json:"priority"` // 0=없음, 1~3
 	AssigneeID  *int64  `json:"assignee_id"`
 	CreatedBy   int64   `json:"created_by"`
@@ -163,7 +164,7 @@ func (s *Store) GetBoard(ctx context.Context, id int64, sortBy Sort) (BoardDetai
 	}
 
 	cards, err := s.db.QueryContext(ctx, `
-		SELECT c.id, c.column_id, c.title, c.description, c.content, c.position, c.due_at, c.priority, c.assignee_id, c.created_by, c.created_at, c.updated_at
+		SELECT c.id, c.column_id, c.title, c.description, c.content, c.position, c.due_at, c.end_at, c.priority, c.assignee_id, c.created_by, c.created_at, c.updated_at
 		FROM cards c JOIN columns col ON col.id = c.column_id
 		WHERE col.board_id=? ORDER BY c.column_id, `+orderBy(sortBy, "c."), id)
 	if err != nil {
@@ -172,7 +173,7 @@ func (s *Store) GetBoard(ctx context.Context, id int64, sortBy Sort) (BoardDetai
 	defer cards.Close()
 	for cards.Next() {
 		var c Card
-		if err := cards.Scan(&c.ID, &c.ColumnID, &c.Title, &c.Description, &c.Content, &c.Position, &c.DueAt, &c.Priority, &c.AssigneeID, &c.CreatedBy, &c.CreatedAt, &c.UpdatedAt); err != nil {
+		if err := cards.Scan(&c.ID, &c.ColumnID, &c.Title, &c.Description, &c.Content, &c.Position, &c.DueAt, &c.EndAt, &c.Priority, &c.AssigneeID, &c.CreatedBy, &c.CreatedAt, &c.UpdatedAt); err != nil {
 			return d, err
 		}
 		if i, ok := byID[c.ColumnID]; ok {
