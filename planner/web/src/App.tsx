@@ -2,6 +2,7 @@ import { Navigate, Outlet, Route, Routes } from 'react-router'
 import { useQuery } from '@tanstack/react-query'
 import { api, type User } from './api'
 import Shell from './components/Shell'
+import { useLiveSync } from './lib/useLiveSync'
 import Login from './pages/Login'
 import Dashboard from './pages/Dashboard'
 import Board from './pages/Board'
@@ -28,6 +29,12 @@ export default function App() {
   )
 }
 
+// 로그인한 뒤에만 스트림을 연다 — 로그인 화면에서 열면 401로 재연결만 돈다.
+function LiveOutlet() {
+  useLiveSync()
+  return <Outlet />
+}
+
 // 로그인 게이트. /api/me 가 401이면 api.ts 가 /login 으로 보낸다.
 function RequireAuth() {
   const me = useQuery({
@@ -45,5 +52,5 @@ function RequireAuth() {
     )
   }
   if (me.isError) return <Navigate to="/login" replace />
-  return <Outlet />
+  return <LiveOutlet />
 }

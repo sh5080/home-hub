@@ -120,9 +120,10 @@ func cmdServe(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	handler, hub := api.NewWithHub(st, log, *dev)
 	srv := &http.Server{
 		Addr:              *listen,
-		Handler:           api.New(st, log, *dev),
+		Handler:           handler,
 		ReadHeaderTimeout: 5 * time.Second,
 		// slowloris 방지. bcrypt가 최대 ~3초(대기)+1초(해싱)이라 Write는 넉넉히 둔다.
 		ReadTimeout:  15 * time.Second,
@@ -134,6 +135,9 @@ func cmdServe(args []string) error {
 
 	go func() {
 		<-ctx.Done()
+		// 스트림을 먼저 끊는다 — Shutdown 은 핸들러가 돌아오기를 기다리므로
+		// 열린 SSE가 있으면 5초 마감을 그냥 다 쓴다.
+		hub.Close()
 		shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_ = srv.Shutdown(shutCtx)

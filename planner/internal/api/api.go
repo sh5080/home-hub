@@ -19,13 +19,22 @@ type Server struct {
 	dev bool // drops the Secure cookie flag so Vite's http://localhost works
 	// bcrypt는 Pi에서 한 번에 ~1초를 쓴다. 동시 실행을 묶어 CPU 고갈을 막는다.
 	bcrypt bcryptLimiter
+	// 변경 알림(SSE) 허브.
+	hub *hub
 }
 
 // New builds the full handler: /api/* routes, then the SPA. Route order matters:
 // the /api/ catch-all 404 is registered so an unknown API path can never fall
 // through to index.html.
 func New(st *store.Store, log *slog.Logger, dev bool) http.Handler {
-	s := &Server{st: st, log: log, dev: dev, bcrypt: newBcryptLimiter()}
+	h, _ := NewWithHub(st, log, dev)
+	return h
+}
+
+// NewWithHub는 핸들러와 함께 알림 허브를 돌려준다. 종료 시 스트림을 먼저
+// 끊어야 Shutdown 이 마감을 다 쓰지 않는다.
+func NewWithHub(st *store.Store, log *slog.Logger, dev bool) (http.Handler, interface{ Close() }) {
+	s := &Server{st: st, log: log, dev: dev, bcrypt: newBcryptLimiter(), hub: newHub()}
 	devCSP = dev
 	mux := http.NewServeMux()
 
@@ -45,12 +54,14 @@ func New(st *store.Store, log *slog.Logger, dev bool) http.Handler {
 	s.registerBoards(authed)
 	s.registerCalendar(authed)
 	s.registerRoutines(authed)
+	authed.HandleFunc("GET /api/stream", s.stream)
 	authed.HandleFunc("/", notFound) // inner mux must also answer JSON, never the stdlib HTML 404
-	gated := auth.Middleware(st, authed)
+	// 변경 알림은 미들웨어 한 곳에서 — 핸들러마다 넣으면 빠뜨린다.
+	gated := auth.Middleware(st, s.broadcastOnWrite(authed))
 	for _, p := range []string{
 		"/api/logout", "/api/me", "/api/users", "/api/users/",
 		"/api/boards", "/api/boards/", "/api/columns/", "/api/cards/",
-		"/api/routines", "/api/routines/", "/api/calendar", "/api/today",
+		"/api/routines", "/api/routines/", "/api/calendar", "/api/today", "/api/stream",
 	} {
 		mux.Handle(p, gated)
 	}
@@ -61,7 +72,7 @@ func New(st *store.Store, log *slog.Logger, dev bool) http.Handler {
 	// --- SPA (must be last) ---
 	mux.Handle("/", webui.Handler())
 
-	return securityHeaders(s.logRequests(mux))
+	return securityHeaders(s.logRequests(mux)), s.hub
 }
 
 func notFound(w http.ResponseWriter, _ *http.Request) {

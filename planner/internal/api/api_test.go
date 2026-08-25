@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -12,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/sh5080/home-hub/planner/internal/store"
 )
@@ -375,3 +377,96 @@ func TestCardDetailAndContent(t *testing.T) {
 }
 
 // 변경이 SSE로 흘러나오는지. 이게 깨지면 화면이 조용히 30초 낡은 채로 남는다.
+
+func TestStreamNotifiesOnWrite(t *testing.T) {
+	c := newClient(t)
+	c.must("POST", "/api/login", map[string]string{"name": "테스트1", "password": "pass1234"}, nil, 200)
+
+	req, _ := http.NewRequest("GET", c.srv.URL+"/api/stream", nil)
+	for _, ck := range c.jar {
+		req.AddCookie(ck)
+	}
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != 200 {
+		t.Fatalf("stream status %d", res.StatusCode)
+	}
+	if ct := res.Header.Get("Content-Type"); !strings.HasPrefix(ct, "text/event-stream") {
+		t.Fatalf("content-type %q", ct)
+	}
+
+	lines := make(chan string, 8)
+	go func() {
+		sc := bufio.NewScanner(res.Body)
+		for sc.Scan() {
+			lines <- sc.Text()
+		}
+		close(lines)
+	}()
+
+	// 서두에 retry 가 온다 — EventSource 가 정상 종료 후 재연결하도록.
+	if got := waitLine(t, lines, "retry:"); got == "" {
+		t.Fatal("retry 서두가 없다")
+	}
+
+	// 읽기 요청은 알리지 않는다.
+	var d store.BoardDetail
+	c.must("GET", "/api/boards/1", nil, &d, 200)
+
+	// 쓰기 요청은 알린다.
+	var card store.Card
+	c.must("POST", "/api/columns/"+itoa(d.Columns[0].ID)+"/cards", map[string]any{"title": "새 카드"}, &card, 201)
+	if got := waitLine(t, lines, "event: changed"); got == "" {
+		t.Fatal("쓰기 후 changed 이벤트가 오지 않았다")
+	}
+}
+
+// waitLine은 prefix로 시작하는 줄을 1초 안에 기다린다.
+func waitLine(t *testing.T, lines chan string, prefix string) string {
+	t.Helper()
+	deadline := time.After(time.Second)
+	for {
+		select {
+		case ln, ok := <-lines:
+			if !ok {
+				return ""
+			}
+			if strings.HasPrefix(ln, prefix) {
+				return ln
+			}
+		case <-deadline:
+			return ""
+		}
+	}
+}
+
+// GET만으로는 버전이 오르지 않는다.
+func TestReadsDoNotBroadcast(t *testing.T) {
+	st, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	h := newHub()
+	before := h.version.Load()
+	s := &Server{st: st, log: slog.New(slog.NewTextHandler(io.Discard, nil)), hub: h}
+	rec := httptest.NewRecorder()
+	s.broadcastOnWrite(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(200)
+	})).ServeHTTP(rec, httptest.NewRequest("GET", "/api/boards", nil))
+	if h.version.Load() != before {
+		t.Fatal("GET이 알림을 보냈다")
+	}
+	// 실패한 쓰기도 알리지 않는다.
+	s.broadcastOnWrite(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(400)
+	})).ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("POST", "/api/boards", nil))
+	if h.version.Load() != before {
+		t.Fatal("실패한 쓰기가 알림을 보냈다")
+	}
+}
+
+// 한도를 넘으면 생성은 507, 삭제는 계속 동작.
