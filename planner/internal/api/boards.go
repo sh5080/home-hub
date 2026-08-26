@@ -66,6 +66,9 @@ func (s *Server) listBoards(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) createBoard(w http.ResponseWriter, r *http.Request) {
+	if s.quotaBlocked(w, r) {
+		return
+	}
 	var req nameReq
 	if !decodeJSON(w, r, &req) {
 		return
@@ -175,9 +178,30 @@ func (r cardReq) input() store.CardInput {
 	return store.CardInput{Title: r.Title, Content: r.Content, DueAt: r.DueAt, EndAt: r.EndAt, AssigneeID: r.AssigneeID, Priority: r.Priority}
 }
 
+// quotaBlocked는 한도를 넘었으면 507을 쓰고 true를 돌려준다.
+// 새로 만드는 요청에만 건다 — 수정과 삭제는 막지 않는다. 막으면 사용자가
+// 공간을 비울 방법이 사라진다.
+func (s *Server) quotaBlocked(w http.ResponseWriter, r *http.Request) bool {
+	over, st, err := s.st.QuotaExceeded(r.Context())
+	if err != nil {
+		s.log.Warn("quota check", "err", err)
+		return false // 검사 실패로 쓰기를 막지는 않는다
+	}
+	if !over {
+		return false
+	}
+	s.log.Warn("quota exceeded", "used", st.UsedBytes, "quota", st.Quota)
+	writeErr(w, http.StatusInsufficientStorage,
+		"저장 공간이 가득 찼어요. 설정에서 정리하거나 한도를 늘려주세요")
+	return true
+}
+
 func (s *Server) createCard(w http.ResponseWriter, r *http.Request) {
 	col, ok := pathID(w, r)
 	if !ok {
+		return
+	}
+	if s.quotaBlocked(w, r) {
 		return
 	}
 	var req cardReq

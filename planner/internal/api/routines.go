@@ -82,6 +82,9 @@ func (s *Server) routineChecks(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) createRoutine(w http.ResponseWriter, r *http.Request) {
+	if s.quotaBlocked(w, r) {
+		return
+	}
 	var req routineReq
 	if !decodeJSON(w, r, &req) {
 		return

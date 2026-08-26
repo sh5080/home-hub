@@ -38,8 +38,9 @@ func invalid(msg string) error { return &ValidationError{Msg: msg} }
 
 // Store wraps the single-connection SQLite handle.
 type Store struct {
-	db   *sql.DB
-	path string
+	db    *sql.DB
+	path  string
+	quota int64 // 0이면 DefaultQuota
 }
 
 // Open opens (creating if needed) the database at dir/planner.db and applies

@@ -6,6 +6,7 @@ import { useCalendar, useInvalidating, useMe, useToday, useUsers } from '../lib/
 import { addDays, ampm, fmtDate, fmtDue, fmtTime, hasTime, today, weekdayIndex, WEEKDAYS } from '../lib/date'
 import { Avatar, Button, Field, Input, PageHeader, Sheet } from '../components/ui'
 import SortToggle, { Stars } from '../components/SortToggle'
+import StorageBar from '../components/StorageBar'
 import type { CalendarData, SortMode } from '../lib/hooks'
 
 export default function Dashboard() {
@@ -267,6 +268,8 @@ function SettingsSheet({ open, onClose }: { open: boolean; onClose: () => void }
               </div>
             </form>
           )}
+
+          <StorageBar />
 
           <Button variant="ghost" className="w-full" onClick={async () => { await api.post('/api/logout'); qc.clear(); nav('/login', { replace: true }) }}>로그아웃</Button>
         </div>

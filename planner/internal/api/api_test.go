@@ -470,3 +470,48 @@ func TestReadsDoNotBroadcast(t *testing.T) {
 }
 
 // 한도를 넘으면 생성은 507, 삭제는 계속 동작.
+
+func TestQuotaEnforcement(t *testing.T) {
+	st, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	ctx := context.Background()
+	if _, err := st.CreateUser(ctx, "테스트1", "pass1234"); err != nil {
+		t.Fatal(err)
+	}
+	h := New(st, slog.New(slog.NewTextHandler(io.Discard, nil)), true)
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+	c := &client{t: t, srv: srv}
+	c.must("POST", "/api/login", map[string]string{"name": "테스트1", "password": "pass1234"}, nil, 200)
+
+	var d store.BoardDetail
+	c.must("GET", "/api/boards/1", nil, &d, 200)
+	col := d.Columns[0].ID
+
+	var card store.Card
+	c.must("POST", "/api/columns/"+itoa(col)+"/cards", map[string]any{"title": "여유 있을 때"}, &card, 201)
+
+	st.SetQuota(1) // 초과 상태로 만든다
+	c.must("POST", "/api/columns/"+itoa(col)+"/cards", map[string]any{"title": "막혀야 함"}, nil, 507)
+	c.must("POST", "/api/boards", map[string]string{"name": "막혀야 함"}, nil, 507)
+	// 수정과 삭제는 계속 된다 — 공간을 비울 수 있어야 한다.
+	c.must("PATCH", "/api/cards/"+itoa(card.ID), map[string]any{"title": "고쳐짐"}, nil, 200)
+	c.must("DELETE", "/api/cards/"+itoa(card.ID), nil, nil, 204)
+
+	st.SetQuota(store.DefaultQuota)
+	c.must("POST", "/api/columns/"+itoa(col)+"/cards", map[string]any{"title": "다시 됨"}, nil, 201)
+}
+
+// 이유식 픽스처는 지어낸 것이다. 실제 식단 데이터는 저장소에 두지 않는다.
+const bfTestPlan = `{
+ "schema": 1,
+ "default_track": ["t1"],
+ "plans": [{"id":"t1","label":"시험구간","kind":"topping","from":100,"to":101,"days":[
+   {"d":100,"new":"가재료","meals":[{"slot":"아침","base":"베이스A","toppings":["가재료","나재료"],"snack":null}]},
+   {"d":101,"meals":[{"slot":"아침","base":"베이스A","toppings":["가재료"],"snack":"나재료"}]}
+ ]}],
+ "ingredients": [{"name":"베이스A","kind":"base"},{"name":"가재료","kind":"cube"},{"name":"나재료","kind":"cube"}]
+}`

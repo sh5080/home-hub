@@ -104,6 +104,7 @@ func cmdServe(args []string) error {
 	data := dataFlag(fs)
 	logLevel := fs.String("log", "info", "log level: debug | info | warn | error")
 	dev := fs.Bool("dev", false, "development mode: session cookie without Secure (for Vite over http://localhost)")
+	quotaMB := fs.Int64("quota-mb", 512, "플래너가 쓸 수 있는 상한(MB). DB+백업 합계가 넘으면 새로 만들기를 막는다")
 	fs.Parse(args)
 
 	log, err := newLogger(*logLevel)
@@ -115,6 +116,7 @@ func cmdServe(args []string) error {
 	if err != nil {
 		return fmt.Errorf("open store: %w", err)
 	}
+	st.SetQuota(*quotaMB << 20)
 	defer st.Close()
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
