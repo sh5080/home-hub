@@ -28,7 +28,7 @@ func TestSortOrders(t *testing.T) {
 	mk("오늘저녁-별2", "2026-09-23T19:00", 2)
 
 	names := func(s Sort) []string {
-		d, err := st.GetBoard(ctx, 1, s)
+		d, err := st.GetBoard(ctx, 1, s, Asc)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -110,7 +110,7 @@ func TestPriorityBackfillFromCallout(t *testing.T) {
 	}
 	ctx := context.Background()
 	u, _ := st.CreateUser(ctx, "테스트1", "pass1234")
-	d, _ := st.GetBoard(ctx, 1, SortManual)
+	d, _ := st.GetBoard(ctx, 1, SortManual, Asc)
 	col := d.Columns[0].ID
 
 	content := `[{"type":"callout","props":{"emoji":"📥"},"content":[{"type":"text","text":"분류: 쇼핑 · 중요도: ⭐⭐ · 얼른","styles":{}}],"children":[]}]`
@@ -160,6 +160,57 @@ func TestStarsAfter(t *testing.T) {
 	for in, want := range cases {
 		if got := starsAfter(in, "중요도:"); got != want {
 			t.Errorf("starsAfter(%q) = %d, want %d", in, got, want)
+		}
+	}
+}
+
+// 역순. 방향을 뒤집어도 "마감 없는 것은 뒤"는 유지돼야 한다 — 날짜 없는
+// 카드가 맨 앞에 몰리면 목록을 읽을 수 없다.
+func TestSortDescending(t *testing.T) {
+	st, by, cols := openTest(t)
+	ctx := context.Background()
+	col := cols[0]
+
+	mk := func(title, due string, prio int) {
+		in := CardInput{Title: &title, Priority: &prio}
+		if due != "" {
+			in.DueAt = &due
+		}
+		if _, err := st.CreateCard(ctx, col, in, by); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mk("마감없음-별3", "", 3)
+	mk("내일-별1", "2026-09-24", 1)
+	mk("오늘아침-별0", "2026-09-23T09:00", 0)
+	mk("오늘저녁-별2", "2026-09-23T19:00", 2)
+
+	names := func(s Sort, o Order) []string {
+		d, err := st.GetBoard(ctx, 1, s, o)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out := []string{}
+		for _, c := range d.Columns[0].Cards {
+			out = append(out, c.Title)
+		}
+		return out
+	}
+
+	// 시간 역순: 늦은 마감이 먼저. 마감 없는 건 여전히 맨 뒤.
+	eq(t, names(SortTime, Desc), []string{"내일-별1", "오늘저녁-별2", "오늘아침-별0", "마감없음-별3"})
+	// 중요도 역순: 별 적은 것이 먼저.
+	eq(t, names(SortPriority, Desc), []string{"오늘아침-별0", "내일-별1", "오늘저녁-별2", "마감없음-별3"})
+	// 수동 역순: 만든 순서의 반대.
+	eq(t, names(SortManual, Desc), []string{"오늘저녁-별2", "오늘아침-별0", "내일-별1", "마감없음-별3"})
+	// 오름차순은 그대로.
+	eq(t, names(SortTime, Asc), []string{"오늘아침-별0", "오늘저녁-별2", "내일-별1", "마감없음-별3"})
+}
+
+func TestParseOrder(t *testing.T) {
+	for in, want := range map[string]Order{"desc": Desc, "asc": Asc, "": Asc, "DESC": Asc, "쓰레기": Asc} {
+		if got := ParseOrder(in); got != want {
+			t.Errorf("ParseOrder(%q) = %v, want %v", in, got, want)
 		}
 	}
 }

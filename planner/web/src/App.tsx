@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { api, type User } from './api'
 import Shell from './components/Shell'
 import { useLiveSync } from './lib/useLiveSync'
+import { SkeletonList } from './components/ui'
 import Login from './pages/Login'
 import Dashboard from './pages/Dashboard'
 import Board from './pages/Board'
@@ -46,8 +47,9 @@ function RequireAuth() {
 
   if (me.isPending) {
     return (
-      <div className="flex h-full items-center justify-center text-slate-400">
-        불러오는 중…
+      <div className="mx-auto max-w-lg space-y-4 p-4">
+        <div className="h-7 w-1/2 animate-pulse rounded bg-slate-200" />
+        <SkeletonList rows={4} />
       </div>
     )
   }

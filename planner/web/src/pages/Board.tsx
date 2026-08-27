@@ -11,9 +11,11 @@ import { CSS } from '@dnd-kit/utilities'
 import { api, type BoardDetail, type Card, type Column } from '../api'
 import { useBoard, useBoards, useInvalidating, useUsers } from '../lib/hooks'
 import { fmtDue, today } from '../lib/date'
-import { Avatar, Button, Input, PageHeader, Sheet } from '../components/ui'
+import { Avatar, Button, Input, PageHeader, Sheet, SkeletonList } from '../components/ui'
 import SortToggle, { Stars } from '../components/SortToggle'
-import type { SortMode } from '../lib/hooks'
+import type { SortMode, SortOrder } from '../lib/hooks'
+import { sortCards } from '../lib/sortCards'
+import { useScrollFade } from '../lib/useScrollFade'
 
 // 손가락(포인터)이 실제로 어느 영역 안에 있는지로 판정한다.
 // closestCorners는 끌고 있는 카드의 모서리와 후보들의 거리를 재는데, 컬럼이
@@ -29,6 +31,10 @@ const collisionDetection: CollisionDetection = (args) => {
 const LAST_BOARD_KEY = 'planner.lastBoard'
 const VIEW_KEY = 'planner.boardView'
 const SORT_KEY = 'planner.boardSort'
+const COLORDER_KEY = 'planner.columnOrder'
+
+/** 컬럼별 정렬 방향. 기준(시간/중요도/수동)은 보드 전체가 하나로 쓴다. */
+type ColOrder = Record<number, SortOrder>
 type View = 'kanban' | 'backlog'
 
 // 할 일 탭은 목록이 아니라 바로 칸반/백로그다. /boards 는 마지막에 본 보드(없으면 첫 보드).
@@ -47,7 +53,7 @@ export default function Board() {
     if (id) try { localStorage.setItem(LAST_BOARD_KEY, String(id)) } catch { /* ignore */ }
   }, [id])
 
-  if (boards.isPending) return <div className="p-6 text-slate-400">불러오는 중…</div>
+  if (boards.isPending) return <div className="p-4"><SkeletonList rows={4} /></div>
   if (!id) return <NoBoards />
   return <Kanban id={id} onSwitch={(bid) => nav(`/boards/${bid}`)} />
 }
@@ -68,13 +74,23 @@ function NoBoards() {
 function Kanban({ id, onSwitch }: { id: number; onSwitch: (id: number) => void }) {
   const qc = useQueryClient()
   const boards = useBoards()
+  // 기본은 시간순이다. 마감이 있는 일이 대부분이라 그게 먼저 보여야 한다.
+  // 직접 정한 순서로 보려면 '수동'으로 바꾼다.
   const [sort, setSortState] = useState<SortMode>(() => {
-    try { return (localStorage.getItem(SORT_KEY) as SortMode) || 'manual' } catch { return 'manual' }
+    try { return (localStorage.getItem(SORT_KEY) as SortMode) || 'time' } catch { return 'time' }
   })
   const setSort = (m: SortMode) => { setSortState(m); try { localStorage.setItem(SORT_KEY, m) } catch { /* ignore */ } }
-  // 정렬이 켜져 있으면 서버가 매번 다시 정렬하므로 드래그로 바꾼 순서가 남지 않는다.
-  const canReorder = sort === 'manual'
-  const board = useBoard(id, sort)
+  // 방향은 컬럼마다 다르다 — 할 일은 마감 가까운 순, 완료는 최근 순처럼.
+  const [colOrder, setColOrderState] = useState<ColOrder>(() => {
+    try { return JSON.parse(localStorage.getItem(COLORDER_KEY) || '{}') } catch { return {} }
+  })
+  const flipOrder = (colID: number) => {
+    const next = { ...colOrder, [colID]: colOrder[colID] === 'desc' ? 'asc' as const : 'desc' as const }
+    setColOrderState(next)
+    try { localStorage.setItem(COLORDER_KEY, JSON.stringify(next)) } catch { /* ignore */ }
+  }
+
+  const board = useBoard(id, 'manual', 'asc')
   const users = useUsers()
   const nav = useNavigate()
   const [adding, setAdding] = useState<Column | null>(null)
@@ -101,10 +117,12 @@ function Kanban({ id, onSwitch }: { id: number; onSwitch: (id: number) => void }
   // 길게 누르기 방식은 iOS에서 홀드 중 미세한 touchmove가 스크롤로 확정돼 드롭이 튀었다.
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }))
 
-  if (board.isPending) return <div className="p-6 text-slate-400">불러오는 중…</div>
+  if (board.isPending) return <div className="p-4"><SkeletonList rows={5} /></div>
   if (board.isError || !board.data) return <div className="p-6 text-rose-500">보드를 불러올 수 없어요</div>
 
-  const { columns } = board.data
+  // 기준은 보드 전체가 하나, 방향만 컬럼별.
+  const orderOf = (colID: number): SortOrder => colOrder[colID] ?? 'asc'
+  const columns = board.data.columns.map((c) => ({ ...c, cards: sortCards(c.cards, sort, orderOf(c.id)) }))
   const userName = (uid: number | null) => users.data?.find((u) => u.id === uid)?.name
   const many = (boards.data?.length ?? 0) > 1
 
@@ -144,8 +162,8 @@ function Kanban({ id, onSwitch }: { id: number; onSwitch: (id: number) => void }
     }
     if (!toCol) return
     if (toCol.id === src.col.id) {
-      // 정렬이 켜져 있으면 같은 컬럼 안 순서 변경은 남지 않는다 — 무시한다.
-      if (!canReorder || toIndex === src.index) return
+      // 정렬이 켜진 컬럼에서는 순서를 바꿔도 다시 정렬돼 남지 않는다 — 무시.
+      if (sort !== 'manual' || toIndex === src.index) return
     }
 
     // 낙관적 갱신: 서버와 같은 splice 의미론으로 로컬 상태를 먼저 바꾼다.
@@ -197,14 +215,14 @@ function Kanban({ id, onSwitch }: { id: number; onSwitch: (id: number) => void }
         </div>
         <SortToggle value={sort} onChange={setSort} />
       </div>
-      {!canReorder && (
+      {sort !== 'manual' && (
         <p className="px-4 pt-1.5 text-[11px] text-slate-400">정렬 중에는 카드를 끌어 순서를 바꿀 수 없어요 · 수동으로 바꾸면 가능</p>
       )}
 
       {view === 'kanban' ? (
         <DndContext sensors={sensors} collisionDetection={collisionDetection} onDragStart={onDragStart} onDragEnd={onDragEnd} onDragCancel={() => setDragging(null)}>
           {/* 컬럼을 한 화면에 나란히. 3개면 3분할, 5개 이상이면 가로 스크롤. */}
-          <div className="flex flex-1 gap-2 overflow-x-auto px-2 py-3">
+          <div className="no-scrollbar flex flex-1 gap-2 overflow-x-auto px-2 py-3">
             {columns.map((col) => (
               <ColumnView
                 key={col.id}
@@ -213,6 +231,8 @@ function Kanban({ id, onSwitch }: { id: number; onSwitch: (id: number) => void }
                 collapsed={expanded !== null && expanded !== col.id}
                 expanded={expanded === col.id}
                 onToggleExpand={() => setExpanded(expanded === col.id ? null : col.id)}
+                order={orderOf(col.id)}
+                onFlipOrder={() => flipOrder(col.id)}
                 userName={userName}
                 onAdd={() => setAdding(col)}
                 onOpen={(c) => nav(`/cards/${c.id}`)}
@@ -332,7 +352,7 @@ function Backlog({ columns, userName, onAdd, onOpen }: { columns: Column[]; user
   )
 }
 
-function ColumnView({ col, narrow, collapsed, expanded, onToggleExpand, userName, onAdd, onOpen }: {
+function ColumnView({ col, narrow, collapsed, expanded, onToggleExpand, userName, onAdd, onOpen, order, onFlipOrder }: {
   col: Column
   narrow: boolean
   collapsed: boolean
@@ -341,8 +361,11 @@ function ColumnView({ col, narrow, collapsed, expanded, onToggleExpand, userName
   userName: (id: number | null) => string | undefined
   onAdd: () => void
   onOpen: (c: Card) => void
+  order: SortOrder
+  onFlipOrder: () => void
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: `col-${col.id}` })
+  const fade = useScrollFade<HTMLUListElement>()
 
   // 접힌 컬럼도 드롭 대상으로 남긴다 — 펼친 상태에서 옆 컬럼으로 카드를
   // 끌어다 놓을 수 있어야 한다.
@@ -367,21 +390,28 @@ function ColumnView({ col, narrow, collapsed, expanded, onToggleExpand, userName
       ref={setNodeRef}
       className={`flex min-w-0 flex-col rounded-2xl transition-colors ${width} sm:min-w-56 ${isOver ? 'bg-slate-200' : 'bg-slate-100'}`}
     >
-      {/* 헤더를 누르면 이 컬럼만 크게 — 다시 누르면 균등 분할로 */}
-      <button
-        onClick={onToggleExpand}
-        className="flex items-center justify-between px-2.5 pt-2.5 pb-1.5 active:opacity-60"
-      >
-        <h2 className="truncate text-xs font-bold text-slate-700">{col.name}</h2>
-        <span className="ml-1 flex shrink-0 items-center gap-1 text-[11px] text-slate-400">
-          {col.cards.length}
-          <svg viewBox="0 0 24 24" className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+      <div className="flex items-center gap-0.5 px-2.5 pt-2.5 pb-1.5">
+        {/* 헤더를 누르면 이 컬럼만 크게 — 다시 누르면 균등 분할로 */}
+        <button onClick={onToggleExpand} className="flex min-w-0 flex-1 items-center gap-1 active:opacity-60">
+          <h2 className="truncate text-xs font-bold text-slate-700">{col.name}</h2>
+          <span className="shrink-0 text-[11px] text-slate-400">{col.cards.length}</span>
+          <svg viewBox="0 0 24 24" className="h-3 w-3 shrink-0 text-slate-400" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
             {expanded ? <path d="M9 4v6H3M15 20v-6h6" /> : <path d="M4 9V3h6M20 15v6h-6" />}
           </svg>
-        </span>
-      </button>
+        </button>
+        {/* 이 컬럼의 정렬 방향만 뒤집는다. 기준은 위 세그먼트가 정한다. */}
+        <button
+          onClick={onFlipOrder}
+          aria-label={`${col.name} 정렬 방향 (${order === 'desc' ? '내림차순' : '오름차순'})`}
+          className={`flex h-5 w-5 shrink-0 items-center justify-center rounded ${order === 'desc' ? 'bg-slate-900 text-white' : 'text-slate-400 active:bg-slate-200'}`}
+        >
+          <svg viewBox="0 0 24 24" className={`h-3 w-3 transition-transform ${order === 'desc' ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M12 5v14M6 11l6-6 6 6" />
+          </svg>
+        </button>
+      </div>
       <SortableContext items={col.cards.map((c) => `card-${c.id}`)} strategy={verticalListSortingStrategy}>
-        <ul className="flex-1 space-y-1.5 overflow-y-auto px-1.5 pb-1">
+        <ul ref={fade.ref} style={fade.style} className="no-scrollbar flex-1 space-y-1.5 overflow-y-auto px-1.5 pb-1">
           {col.cards.map((c) => (
             <SortableCard key={c.id} card={c} userName={userName} onOpen={onOpen} wide={expanded} />
           ))}
@@ -396,18 +426,33 @@ function ColumnView({ col, narrow, collapsed, expanded, onToggleExpand, userName
 function SortableCard({ card, userName, onOpen, wide }: { card: Card; userName: (id: number | null) => string | undefined; onOpen: (c: Card) => void; wide?: boolean }) {
   const { attributes, listeners, setNodeRef, setActivatorNodeRef, transform, transition, isDragging } = useSortable({ id: `card-${card.id}` })
   return (
-    <li ref={setNodeRef} style={{ transform: CSS.Transform.toString(transform), transition }} className={isDragging ? 'opacity-30' : ''}>
+    <li
+      ref={setNodeRef}
+      style={{
+        transform: CSS.Transform.toString(transform),
+        transition,
+        // 카드 전체를 끌 수 있게 하되 세로 스크롤은 브라우저에 남긴다.
+        // none 으로 막으면 컬럼 목록을 손가락으로 넘길 수 없고, 그대로 두면
+        // 가로로 끌 때 브라우저가 먼저 스크롤로 판정해 드롭이 엉킨다.
+        // pan-y 는 "세로는 브라우저, 가로는 앱" 이라는 뜻이다.
+        touchAction: 'pan-y',
+      }}
+      className={isDragging ? 'opacity-30' : ''}
+      {...attributes}
+      {...listeners}
+    >
       <CardTile
         card={card}
         userName={userName}
         wide={wide}
         onClick={() => onOpen(card)}
         grip={
+          // 세로 재정렬용 손잡이. 여기만 세로 제스처도 앱이 가져간다.
           <button
             ref={setActivatorNodeRef}
             {...attributes}
             {...listeners}
-            aria-label="끌어서 이동"
+            aria-label="끌어서 순서 바꾸기"
             className="-my-2 -mr-2 flex w-7 shrink-0 cursor-grab items-center justify-center self-stretch rounded-r-lg text-slate-300 active:cursor-grabbing active:bg-slate-100"
             style={{ touchAction: 'none' }}
           >

@@ -129,7 +129,7 @@ func (s *Store) DeleteBoard(ctx context.Context, id int64) error {
 
 // GetBoard loads the board, its columns in order, and each column's cards
 // ordered by sort (SortManual = 드래그로 정한 순서).
-func (s *Store) GetBoard(ctx context.Context, id int64, sortBy Sort) (BoardDetail, error) {
+func (s *Store) GetBoard(ctx context.Context, id int64, sortBy Sort, order Order) (BoardDetail, error) {
 	var d BoardDetail
 	err := s.db.QueryRowContext(ctx, `SELECT id, name, created_by, created_at FROM boards WHERE id=?`, id).
 		Scan(&d.Board.ID, &d.Board.Name, &d.Board.CreatedBy, &d.Board.CreatedAt)
@@ -166,7 +166,7 @@ func (s *Store) GetBoard(ctx context.Context, id int64, sortBy Sort) (BoardDetai
 	cards, err := s.db.QueryContext(ctx, `
 		SELECT c.id, c.column_id, c.title, c.description, c.content, c.position, c.due_at, c.end_at, c.priority, c.assignee_id, c.created_by, c.created_at, c.updated_at
 		FROM cards c JOIN columns col ON col.id = c.column_id
-		WHERE col.board_id=? ORDER BY c.column_id, `+orderBy(sortBy, "c."), id)
+		WHERE col.board_id=? ORDER BY c.column_id, `+orderBy(sortBy, order, "c."), id)
 	if err != nil {
 		return d, err
 	}

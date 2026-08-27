@@ -4,7 +4,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { api } from '../api'
 import { useCalendar, useInvalidating, useMe, useToday, useUsers } from '../lib/hooks'
 import { addDays, ampm, fmtDate, fmtDue, fmtTime, hasTime, today, weekdayIndex, WEEKDAYS } from '../lib/date'
-import { Avatar, Button, Field, Input, PageHeader, Sheet } from '../components/ui'
+import { Avatar, Button, Field, Input, PasswordInput, PageHeader, Sheet, SkeletonList } from '../components/ui'
 import SortToggle, { Stars } from '../components/SortToggle'
 import StorageBar from '../components/StorageBar'
 import type { CalendarData, SortMode } from '../lib/hooks'
@@ -17,6 +17,8 @@ export default function Dashboard() {
     try { return (localStorage.getItem('planner.homeSort') as SortMode) || 'time' } catch { return 'time' }
   })
   const setSort = (m: SortMode) => { setSortState(m); try { localStorage.setItem('planner.homeSort', m) } catch { /* ignore */ } }
+  // 방향 토글은 두지 않는다. 홈은 "오늘 뭘 할까"를 훑는 화면이라 가까운
+  // 마감·높은 중요도가 위에 오는 게 늘 맞다. 역순은 보드에서 쓴다.
   const day = useToday(todayStr, sort)
   const week = useCalendar(todayStr, addDays(todayStr, 7))
   const [settings, setSettings] = useState(false)
@@ -58,7 +60,7 @@ export default function Dashboard() {
           <div className="mb-2 flex items-center justify-between gap-2">
             <h2 className="text-base font-bold">오늘 할 일</h2>
             <div className="flex items-center gap-2">
-              <span className="text-xs text-slate-400">{done}/{total}</span>
+              {!day.isPending && <span className="text-xs text-slate-400">{done}/{total}</span>}
               <SortToggle
                 value={sort}
                 onChange={setSort}
@@ -72,6 +74,7 @@ export default function Dashboard() {
               <div className="h-full rounded-full bg-emerald-500 transition-all" style={{ width: `${(done / total) * 100}%` }} />
             </div>
           )}
+          {day.isPending && <SkeletonList rows={3} />}
           <ul className="space-y-1.5">
             {shownRoutines.map((r) => {
               const on = !!r.checked_by
@@ -115,7 +118,7 @@ export default function Dashboard() {
                 </Link>
               </li>
             )}
-            {total === 0 && (
+            {!day.isPending && total === 0 && (
               <li className="rounded-xl bg-white p-4 text-center text-sm text-slate-400">
                 오늘 할 일이 없어요 · <Link to="/boards" className="underline">할 일</Link> · <Link to="/routines" className="underline">루틴</Link>
               </li>
@@ -128,7 +131,7 @@ export default function Dashboard() {
             <h2 className="text-base font-bold">앞으로 7일</h2>
             <Link to="/calendar" className="text-xs text-slate-400">캘린더 ›</Link>
           </div>
-          <WeekStrip data={week.data} from={todayStr} />
+          {week.isPending ? <SkeletonList rows={2} /> : <WeekStrip data={week.data} from={todayStr} />}
         </section>
       </div>
 
@@ -260,7 +263,7 @@ function SettingsSheet({ open, onClose }: { open: boolean; onClose: () => void }
               className="space-y-2 rounded-xl bg-slate-50 p-3"
             >
               <Field label="이름"><Input autoFocus value={name} onChange={(e) => setName(e.target.value)} /></Field>
-              <Field label="비밀번호 (8자 이상)"><Input type="password" autoComplete="new-password" value={pw} onChange={(e) => setPw(e.target.value)} /></Field>
+              <Field label="비밀번호 (8자 이상)"><PasswordInput autoComplete="new-password" value={pw} onChange={(e) => setPw(e.target.value)} /></Field>
               {err && <p className="text-xs text-rose-500">{err}</p>}
               <div className="flex justify-end gap-2">
                 <Button variant="ghost" type="button" onClick={() => setAdding(false)}>취소</Button>
@@ -327,13 +330,13 @@ function PasswordSheet({ target, isSelf, actorName, onClose }: {
           </p>
         )}
         <Field label={`${actorName}(나)의 현재 비밀번호`}>
-          <Input type="password" autoComplete="current-password" autoFocus value={current} onChange={(e) => setCurrent(e.target.value)} />
+          <PasswordInput autoComplete="current-password" autoFocus value={current} onChange={(e) => setCurrent(e.target.value)} />
         </Field>
         <Field label={isSelf ? '새 비밀번호 (8자 이상)' : `${target?.name}님의 새 비밀번호 (8자 이상)`}>
-          <Input type="password" autoComplete="new-password" value={next} onChange={(e) => setNext(e.target.value)} />
+          <PasswordInput autoComplete="new-password" value={next} onChange={(e) => setNext(e.target.value)} />
         </Field>
         <Field label="새 비밀번호 확인">
-          <Input type="password" autoComplete="new-password" value={again} onChange={(e) => setAgain(e.target.value)} />
+          <PasswordInput autoComplete="new-password" value={again} onChange={(e) => setAgain(e.target.value)} />
         </Field>
         {mismatch && <p className="text-xs text-rose-500">새 비밀번호가 서로 달라요</p>}
         {err && <p className="text-xs text-rose-500">{err}</p>}

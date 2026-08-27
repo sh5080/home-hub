@@ -84,7 +84,7 @@ func TestEventsAreMovedIntoCards(t *testing.T) {
 		t.Fatal("events 테이블이 남아 있다")
 	}
 
-	d, err := st.GetBoard(ctx, 1, SortManual)
+	d, err := st.GetBoard(ctx, 1, SortManual, Asc)
 	if err != nil {
 		t.Fatal(err)
 	}

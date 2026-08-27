@@ -86,7 +86,7 @@ func (s *Server) getBoard(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	d, err := s.st.GetBoard(r.Context(), id, store.ParseSort(r.URL.Query().Get("sort")))
+	d, err := s.st.GetBoard(r.Context(), id, store.ParseSort(r.URL.Query().Get("sort")), store.ParseOrder(r.URL.Query().Get("order")))
 	if s.storeErr(w, err, "get board") {
 		return
 	}

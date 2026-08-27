@@ -23,3 +23,13 @@ input[type="datetime-local"] {
   -webkit-appearance: none;
   appearance: none;
 }
+
+/* 스크롤바를 숨긴다. 어디까지 더 있는지는 가장자리 페이드(useScrollFade)가
+   알려주므로 막대가 없어도 길을 잃지 않는다. */
+.no-scrollbar {
+  scrollbar-width: none;          /* Firefox */
+  -ms-overflow-style: none;       /* 구형 Edge */
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;                  /* Safari, Chrome */
+}

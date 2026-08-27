@@ -377,7 +377,6 @@ func TestCardDetailAndContent(t *testing.T) {
 }
 
 // 변경이 SSE로 흘러나오는지. 이게 깨지면 화면이 조용히 30초 낡은 채로 남는다.
-
 func TestStreamNotifiesOnWrite(t *testing.T) {
 	c := newClient(t)
 	c.must("POST", "/api/login", map[string]string{"name": "테스트1", "password": "pass1234"}, nil, 200)
@@ -470,7 +469,6 @@ func TestReadsDoNotBroadcast(t *testing.T) {
 }
 
 // 한도를 넘으면 생성은 507, 삭제는 계속 동작.
-
 func TestQuotaEnforcement(t *testing.T) {
 	st, err := store.Open(t.TempDir())
 	if err != nil {
@@ -504,14 +502,3 @@ func TestQuotaEnforcement(t *testing.T) {
 	st.SetQuota(store.DefaultQuota)
 	c.must("POST", "/api/columns/"+itoa(col)+"/cards", map[string]any{"title": "다시 됨"}, nil, 201)
 }
-
-// 이유식 픽스처는 지어낸 것이다. 실제 식단 데이터는 저장소에 두지 않는다.
-const bfTestPlan = `{
- "schema": 1,
- "default_track": ["t1"],
- "plans": [{"id":"t1","label":"시험구간","kind":"topping","from":100,"to":101,"days":[
-   {"d":100,"new":"가재료","meals":[{"slot":"아침","base":"베이스A","toppings":["가재료","나재료"],"snack":null}]},
-   {"d":101,"meals":[{"slot":"아침","base":"베이스A","toppings":["가재료"],"snack":"나재료"}]}
- ]}],
- "ingredients": [{"name":"베이스A","kind":"base"},{"name":"가재료","kind":"cube"},{"name":"나재료","kind":"cube"}]
-}`

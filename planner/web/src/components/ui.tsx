@@ -1,4 +1,4 @@
-import { useEffect, type ReactNode } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 
 /** 페이지 상단: 제목 + 우측 액션 */
 export function PageHeader({ title, right, back }: { title: ReactNode; right?: ReactNode; back?: () => void }) {
@@ -71,6 +71,50 @@ export function Input(props: React.InputHTMLAttributes<HTMLInputElement>) {
   )
 }
 
+/**
+ * 비밀번호 입력. 기본은 가려두고, 눈 아이콘으로 잠깐 볼 수 있다.
+ *
+ * 보안상 손해가 아니다 — 값은 이미 DOM과 메모리에 있고, 토글은 화면에
+ * 그리는지만 바꾼다. 실제 위험은 어깨너머로 보는 사람뿐이라 기본을 가린
+ * 상태로 두고 사용자가 상황을 보고 누르게 한다.
+ *
+ * 오히려 도움이 된다: 최소 8자를 폰에서 안 보고 치면 오타가 잦고, 오타가
+ * 잦으면 사람은 짧은 비밀번호를 고른다. 게다가 5회 실패하면 계정이 잠긴다.
+ * NIST SP 800-63B도 같은 이유로 표시 옵션 제공을 권한다.
+ */
+export function PasswordInput({ dark, ...props }: React.InputHTMLAttributes<HTMLInputElement> & { dark?: boolean }) {
+  const [shown, setShown] = useState(false)
+  const base = dark
+    ? 'w-full rounded-xl border border-slate-700 bg-slate-800 px-4 py-3 pr-12 text-base text-white outline-none focus:border-slate-400'
+    : 'w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 pr-11 text-base outline-none focus:border-slate-400'
+  return (
+    <div className="relative">
+      <input {...props} type={shown ? 'text' : 'password'} className={`${base} ${props.className ?? ''}`} />
+      <button
+        type="button"
+        onClick={() => setShown(!shown)}
+        // 폼 제출·포커스 이동을 건드리지 않는다
+        onMouseDown={(e) => e.preventDefault()}
+        tabIndex={-1}
+        aria-label={shown ? '비밀번호 숨기기' : '비밀번호 보기'}
+        className={`absolute inset-y-0 right-0 flex w-11 items-center justify-center ${dark ? 'text-slate-400' : 'text-slate-400'} active:opacity-60`}
+      >
+        {shown ? (
+          <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M3 3l18 18M10.6 10.7a2 2 0 002.8 2.8" />
+            <path d="M9.4 5.2A9.5 9.5 0 0112 5c5 0 9 4.5 9 7 0 .9-.5 2-1.4 3.1M6.3 6.4C3.9 7.9 3 10.2 3 12c0 2.5 4 7 9 7 1.4 0 2.7-.4 3.8-.9" />
+          </svg>
+        ) : (
+          <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M3 12s3.5-7 9-7 9 7 9 7-3.5 7-9 7-9-7-9-7z" />
+            <circle cx="12" cy="12" r="2.6" />
+          </svg>
+        )}
+      </button>
+    </div>
+  )
+}
+
 export function Textarea(props: React.TextareaHTMLAttributes<HTMLTextAreaElement>) {
   return (
     <textarea
@@ -92,6 +136,7 @@ export function Field({ label, children }: { label: string; children: ReactNode 
 export function Empty({ children }: { children: ReactNode }) {
   return <p className="py-10 text-center text-sm text-slate-400">{children}</p>
 }
+
 
 /** 목록이 들어올 자리를 미리 차지하는 뼈대. 화면이 덜컥 밀리지 않게 한다. */
 export function SkeletonList({ rows = 3, className = '' }: { rows?: number; className?: string }) {

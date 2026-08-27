@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { api, type Routine } from '../api'
 import { useInvalidating, useRoutineChecks, useRoutines, useUsers } from '../lib/hooks'
 import { addDays, maskBit, startOfWeek, today, WEEKDAYS } from '../lib/date'
-import { Avatar, Button, Empty, Field, Input, PageHeader, Sheet } from '../components/ui'
+import { Avatar, Button, Empty, Field, Input, PageHeader, Sheet, SkeletonList } from '../components/ui'
 
 export default function Routines() {
   const [weekStart, setWeekStart] = useState(() => startOfWeek(today()))
@@ -96,7 +96,8 @@ export default function Routines() {
             </li>
           ))}
         </ul>
-        {active.length === 0 && <Empty>루틴을 추가해보세요</Empty>}
+        {routines.isPending && <SkeletonList rows={3} />}
+        {!routines.isPending && active.length === 0 && <Empty>루틴을 추가해보세요</Empty>}
 
         {paused.length > 0 && (
           <details className="mt-4">

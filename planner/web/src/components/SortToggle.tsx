@@ -5,11 +5,15 @@ import type { SortMode } from '../lib/hooks'
 // 수동일 때만 드래그로 바꾼 순서가 화면 순서가 된다. 다른 기준을 켜면 서버가
 // 매번 정렬하므로 드래그 재정렬이 남지 않는다 — 그래서 UI에서도 막는다.
 const MODES: { key: SortMode; label: string }[] = [
-  { key: 'manual', label: '수동' },
   { key: 'time', label: '시간' },
   { key: 'priority', label: '중요도' },
+  { key: 'manual', label: '수동' },
 ]
 
+export type SortOrder = 'asc' | 'desc'
+
+// 방향(오름/내림)은 여기 없다. 칸반에서는 컬럼마다 달라야 해서 각 컬럼
+// 헤더의 화살표가 맡는다 — 기준은 하나, 방향은 컬럼별.
 export default function SortToggle({
   value,
   onChange,

@@ -117,7 +117,7 @@ func cmdImport(args []string) error {
 		}
 		fmt.Printf("보드 생성: %s\n", target.Name)
 	}
-	detail, err := st.GetBoard(ctx, target.ID, store.SortManual)
+	detail, err := st.GetBoard(ctx, target.ID, store.SortManual, store.Asc)
 	if err != nil {
 		return err
 	}

@@ -2,6 +2,7 @@ import { useState, type FormEvent } from 'react'
 import { useNavigate } from 'react-router'
 import { useQueryClient } from '@tanstack/react-query'
 import { api, ApiError, type User } from '../api'
+import { PasswordInput } from '../components/ui'
 
 export default function Login() {
   const nav = useNavigate()
@@ -45,12 +46,12 @@ export default function Login() {
           </label>
           <label className="block">
             <span className="text-sm text-slate-300">비밀번호</span>
-            <input
-              type="password"
+            <PasswordInput
+              dark
               autoComplete="current-password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              className="mt-1 w-full rounded-xl border border-slate-700 bg-slate-800 px-4 py-3 text-base text-white outline-none focus:border-slate-400"
+              className="mt-1"
             />
           </label>
 

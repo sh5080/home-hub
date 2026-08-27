@@ -37,7 +37,7 @@ func TestInjectionPayloadsAreStoredAsData(t *testing.T) {
 		t.Fatal(err)
 	}
 	boards, _ := st.ListBoards(ctx)
-	d, _ := st.GetBoard(ctx, boards[0].ID, SortManual)
+	d, _ := st.GetBoard(ctx, boards[0].ID, SortManual, Asc)
 	col := d.Columns[0].ID
 
 	for _, p := range payloads {

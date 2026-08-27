@@ -26,19 +26,48 @@ func ParseSort(s string) Sort {
 	}
 }
 
+// Order는 정렬 방향이다. 기준(Sort)과 방향을 따로 두면 조합마다 SQL을
+// 새로 쓰지 않아도 된다.
+type Order bool
+
+const (
+	Asc  Order = false
+	Desc Order = true
+)
+
+// ParseOrder는 ?order=desc 만 역순으로 본다. 그 외는 오름차순.
+func ParseOrder(s string) Order {
+	if s == "desc" {
+		return Desc
+	}
+	return Asc
+}
+
 // orderBy는 정렬 기준에 해당하는 SQL 절을 준다. 문자열 조립이지만 값이
 // 하드코딩 상수뿐이라 주입 경로가 없다(ParseSort가 외부 입력을 걸러낸다).
 //
 // 두 기준 모두 마지막에 position으로 끊는다 — 수동 순서가 최종 동점자다.
 // 마감 없는 카드는 항상 뒤로 보낸다(NULL이 먼저 오면 날짜순이 안 보인다).
-func orderBy(s Sort, prefix string) string {
+func orderBy(s Sort, o Order, prefix string) string {
 	p := prefix
+	// 방향을 뒤집을 때도 "마감 없는 것은 항상 뒤"는 유지한다. 날짜가 없는
+	// 카드가 맨 앞에 몰리면 목록을 읽을 수 없다 — 방향은 '값이 있는 것들'
+	// 사이의 순서일 뿐이다.
+	dir := func(asc, desc string) string {
+		if o == Desc {
+			return desc
+		}
+		return asc
+	}
 	switch s {
 	case SortTime:
-		return p + "due_at IS NULL, " + p + "due_at, " + p + "priority DESC, " + p + "position, " + p + "id"
+		return p + "due_at IS NULL, " +
+			p + "due_at " + dir("ASC", "DESC") + ", " +
+			p + "priority DESC, " + p + "position, " + p + "id"
 	case SortPriority:
-		return p + "priority DESC, " + p + "due_at IS NULL, " + p + "due_at, " + p + "position, " + p + "id"
+		return p + "priority " + dir("DESC", "ASC") + ", " +
+			p + "due_at IS NULL, " + p + "due_at, " + p + "position, " + p + "id"
 	default:
-		return p + "position, " + p + "id"
+		return p + "position " + dir("ASC", "DESC") + ", " + p + "id"
 	}
 }

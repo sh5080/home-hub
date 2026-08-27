@@ -382,7 +382,7 @@ type TodoCard struct {
 // board — the kanban convention for "to do" — ordered by due date first, then
 // board, then position. The last column (max position) is reported as the
 // completion target.
-func (s *Store) TodoCards(ctx context.Context, sortBy Sort) ([]TodoCard, error) {
+func (s *Store) TodoCards(ctx context.Context, sortBy Sort, order Order) ([]TodoCard, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT c.id, c.column_id, c.title, c.description, c.content, c.position, c.due_at, c.end_at, c.priority, c.assignee_id, c.created_by, c.created_at, c.updated_at,
 		       b.id, b.name,
@@ -391,7 +391,7 @@ func (s *Store) TodoCards(ctx context.Context, sortBy Sort) ([]TodoCard, error) 
 		JOIN columns col ON col.id = c.column_id
 		JOIN boards b ON b.id = col.board_id
 		WHERE col.position = 0
-		ORDER BY `+orderBy(sortBy, "c.")+`, b.id`)
+		ORDER BY `+orderBy(sortBy, order, "c.")+`, b.id`)
 	if err != nil {
 		return nil, err
 	}

@@ -6,6 +6,7 @@ import { useUsers } from '../lib/hooks'
 import { dueLabel, hasTime, today } from '../lib/date'
 import BlockEditor from '../components/BlockEditor'
 import { StarPicker } from '../components/SortToggle'
+import { SkeletonList } from '../components/ui'
 
 // 카드 상세 = 전체 페이지(노션 방식). 바텀시트가 아니라 라우트라서 뒤로가기,
 // 링크 공유, 스크롤이 자연스럽다.
@@ -51,7 +52,15 @@ export default function CardPage() {
 
   useEffect(() => () => window.clearTimeout(timer.current), [])
 
-  if (q.isPending) return <div className="p-6 text-slate-400">불러오는 중…</div>
+  if (q.isPending) {
+    return (
+      <div className="mx-auto max-w-2xl space-y-4 p-4">
+        <div className="h-8 w-2/3 animate-pulse rounded bg-slate-200" />
+        <SkeletonList rows={3} />
+        <div className="h-32 animate-pulse rounded-xl bg-slate-100" />
+      </div>
+    )
+  }
   if (q.isError || !q.data) return <div className="p-6 text-rose-500">카드를 불러올 수 없어요</div>
 
   const { card, board, columns } = q.data

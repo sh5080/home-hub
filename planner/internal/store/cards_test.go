@@ -22,7 +22,7 @@ func openTest(t *testing.T) (*Store, int64, []int64) {
 	if err != nil || len(boards) != 1 {
 		t.Fatalf("seed board missing: %v %d", err, len(boards))
 	}
-	d, err := st.GetBoard(ctx, boards[0].ID, SortManual)
+	d, err := st.GetBoard(ctx, boards[0].ID, SortManual, Asc)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -35,7 +35,7 @@ func openTest(t *testing.T) (*Store, int64, []int64) {
 
 func titles(t *testing.T, st *Store, col int64) []string {
 	t.Helper()
-	d, err := st.GetBoard(context.Background(), 1, SortManual)
+	d, err := st.GetBoard(context.Background(), 1, SortManual, Asc)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,7 +174,7 @@ func TestMoveRejectsOtherBoard(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	od, err := st.GetBoard(context.Background(), other.ID, SortManual)
+	od, err := st.GetBoard(context.Background(), other.ID, SortManual, Asc)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -189,7 +189,7 @@ func TestDeleteColumnCompacts(t *testing.T) {
 	if err := st.DeleteColumn(context.Background(), cols[1]); err != nil {
 		t.Fatal(err)
 	}
-	d, err := st.GetBoard(context.Background(), 1, SortManual)
+	d, err := st.GetBoard(context.Background(), 1, SortManual, Asc)
 	if err != nil {
 		t.Fatal(err)
 	}
