@@ -6,7 +6,7 @@ import { useQueryClient } from '@tanstack/react-query'
 // 카드 상세(['card', id])는 **절대 무효화하지 않는다**. 그 화면은 디바운스
 // 자동저장 + 비제어 블록 편집기라, 타이핑 중에 다시 불러오면 문서가 리셋되고
 // 커서가 튄다. 목록만 갱신하면 충분하다.
-const LIVE_KEYS = ['boards', 'board', 'today', 'calendar', 'routines', 'users']
+const LIVE_KEYS = ['boards', 'board', 'today', 'calendar', 'routines', 'users', 'babyfood', 'babyfood-stock', 'babyfood-foods']
 
 const RETRY_MIN = 2000
 const RETRY_MAX = 30000

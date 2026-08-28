@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { api, type Board, type BoardDetail, type Card, type Routine, type User } from '../api'
+import { api, type BFFood, type BFProfile, type BFRangeData, type BFStockView, type Board, type BoardDetail, type Card, type Routine, type User } from '../api'
 
 export function useMe() {
   return useQuery({ queryKey: ['me'], queryFn: () => api.get<User>('/api/me'), staleTime: Infinity })
@@ -66,5 +66,32 @@ export function useInvalidating<TArgs, TResult = unknown>(fn: (args: TArgs) => P
   return useMutation<TResult, Error, TArgs>({
     mutationFn: fn,
     onSettled: () => keys.forEach((k) => qc.invalidateQueries({ queryKey: k })),
+  })
+}
+
+// --- 이유식 ---
+
+/** 날짜 구간의 식단. 서버가 D+n 으로 저장하고 날짜로 답한다. */
+export function useBabyfood(from: string, to: string) {
+  return useQuery({
+    queryKey: ['babyfood', from, to],
+    queryFn: () => api.get<BFRangeData>(`/api/babyfood?from=${from}&to=${to}`),
+  })
+}
+
+/** 먹어본 음식 전체. 100종 남짓이라 한 번에 받아 화면에서 나눈다. */
+export function useBFFoods() {
+  return useQuery({ queryKey: ['babyfood-foods'], queryFn: () => api.get<BFFood[]>('/api/babyfood/foods') })
+}
+
+export function useBFProfile() {
+  return useQuery({ queryKey: ['babyfood', 'profile'], queryFn: () => api.get<BFProfile>('/api/babyfood/profile') })
+}
+
+/** days를 주면 설정을 바꾸지 않고 그 기간으로만 계산해 본다. */
+export function useBFStock(days?: number) {
+  return useQuery({
+    queryKey: ['babyfood-stock', days ?? 0],
+    queryFn: () => api.get<BFStockView>(`/api/babyfood/stock${days ? `?days=${days}` : ''}`),
   })
 }

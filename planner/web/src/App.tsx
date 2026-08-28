@@ -9,6 +9,9 @@ import Dashboard from './pages/Dashboard'
 import Board from './pages/Board'
 import Calendar from './pages/Calendar'
 import Routines from './pages/Routines'
+import Babyfood from './pages/Babyfood'
+import BabyfoodStock from './pages/BabyfoodStock'
+import BabyfoodFoods from './pages/BabyfoodFoods'
 import CardPage from './pages/CardPage'
 
 export default function App() {
@@ -23,6 +26,9 @@ export default function App() {
           <Route path="cards/:id" element={<CardPage />} />
           <Route path="calendar" element={<Calendar />} />
           <Route path="routines" element={<Routines />} />
+          <Route path="babyfood" element={<Babyfood />} />
+          <Route path="babyfood/stock" element={<BabyfoodStock />} />
+          <Route path="babyfood/foods" element={<BabyfoodFoods />} />
         </Route>
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />

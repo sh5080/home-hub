@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Link, useNavigate } from 'react-router'
+import { Link, useNavigate, useSearchParams } from 'react-router'
 import { useQueryClient } from '@tanstack/react-query'
 import { api } from '../api'
 import { useCalendar, useInvalidating, useMe, useToday, useUsers } from '../lib/hooks'
@@ -7,6 +7,7 @@ import { addDays, ampm, fmtDate, fmtDue, fmtTime, hasTime, today, weekdayIndex, 
 import { Avatar, Button, Field, Input, PasswordInput, PageHeader, Sheet, SkeletonList } from '../components/ui'
 import SortToggle, { Stars } from '../components/SortToggle'
 import StorageBar from '../components/StorageBar'
+import BabyfoodSettings from '../components/BabyfoodSettings'
 import type { CalendarData, SortMode } from '../lib/hooks'
 
 export default function Dashboard() {
@@ -21,7 +22,13 @@ export default function Dashboard() {
   // 마감·높은 중요도가 위에 오는 게 늘 맞다. 역순은 보드에서 쓴다.
   const day = useToday(todayStr, sort)
   const week = useCalendar(todayStr, addDays(todayStr, 7))
-  const [settings, setSettings] = useState(false)
+  // 이유식 탭이 생일 입력을 요구할 때 ?settings=1 로 보낸다.
+  const [params, setParams] = useSearchParams()
+  const [settings, setSettings] = useState(() => params.get('settings') != null)
+  const closeSettings = () => {
+    setSettings(false)
+    if (params.get('settings') != null) setParams({}, { replace: true })
+  }
 
   const keys = [['today'], ['routines'], ['board'], ['boards'], ['calendar']]
   const toggleRoutine = useInvalidating(({ id, on }: { id: number; on: boolean }) =>
@@ -135,7 +142,7 @@ export default function Dashboard() {
         </section>
       </div>
 
-      <SettingsSheet open={settings} onClose={() => setSettings(false)} />
+      <SettingsSheet open={settings} onClose={closeSettings} />
     </div>
   )
 }
@@ -271,6 +278,8 @@ function SettingsSheet({ open, onClose }: { open: boolean; onClose: () => void }
               </div>
             </form>
           )}
+
+          <BabyfoodSettings />
 
           <StorageBar />
 

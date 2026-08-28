@@ -54,6 +54,7 @@ func NewWithHub(st *store.Store, log *slog.Logger, dev bool) (http.Handler, inte
 	s.registerBoards(authed)
 	s.registerCalendar(authed)
 	s.registerRoutines(authed)
+	s.registerBabyfood(authed)
 	authed.HandleFunc("GET /api/stream", s.stream)
 	authed.HandleFunc("GET /api/storage", s.storage)
 	authed.HandleFunc("/", notFound) // inner mux must also answer JSON, never the stdlib HTML 404
@@ -63,6 +64,7 @@ func NewWithHub(st *store.Store, log *slog.Logger, dev bool) (http.Handler, inte
 		"/api/logout", "/api/me", "/api/users", "/api/users/",
 		"/api/boards", "/api/boards/", "/api/columns/", "/api/cards/",
 		"/api/routines", "/api/routines/", "/api/calendar", "/api/today", "/api/stream", "/api/storage",
+		"/api/babyfood", "/api/babyfood/",
 	} {
 		mux.Handle(p, gated)
 	}

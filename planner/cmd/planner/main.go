@@ -8,6 +8,7 @@
 //	planner backup [--out FILE] [--data DIR]   VACUUM INTO 스냅샷
 //	planner migrate status      [--data DIR]   적용/대기 마이그레이션 확인 (적용은 serve가 함)
 //	planner import notion <zip> [--board N] [--apply]  노션 export 가져오기 (기본 dry-run)
+//	planner babyfood import <파일.json> [--apply]      이유식 식단 데이터 넣기 (기본 dry-run)
 //
 // 데이터 디렉터리는 --data 또는 PLANNER_DATA. Pi에서 CLI는 서비스와 같은 사용자
 // (sh5080)로 실행해야 -wal/-shm 파일 소유권이 꼬이지 않는다.
@@ -48,6 +49,8 @@ func main() {
 		err = cmdMigrate(os.Args[2:])
 	case "import":
 		err = cmdImport(os.Args[2:])
+	case "babyfood":
+		err = cmdBabyfood(os.Args[2:])
 	case "-h", "--help", "help":
 		usage()
 		return
@@ -69,6 +72,7 @@ func usage() {
   planner backup [--out FILE] [--data DIR]
   planner migrate status [--data DIR]
   planner import notion <export.zip> [--board NAME] [--apply] [--data DIR]
+  planner babyfood import <파일.json> [--track a,b] [--replace] [--apply] [--data DIR]
 `)
 }
 

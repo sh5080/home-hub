@@ -17,6 +17,7 @@ const tabs = [
   { to: '/boards', label: '할 일', icon: BoardIcon },
   { to: '/calendar', label: '캘린더', icon: CalendarIcon },
   { to: '/routines', label: '루틴', icon: RoutineIcon },
+  { to: '/babyfood', label: '이유식', icon: BabyfoodIcon },
 ]
 
 function TabBar() {
@@ -74,6 +75,16 @@ function CalendarIcon({ className }: IconProps) {
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" className={className}>
       <rect x="3" y="5" width="18" height="16" rx="2" />
       <path d="M3 10h18M8 3v4M16 3v4" />
+    </svg>
+  )
+}
+// 그릇과 숟가락
+function BabyfoodIcon({ className }: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      <path d="M3 11h12a6 6 0 0 1-6 6H9a6 6 0 0 1-6-6z" />
+      <path d="M5 20h8" />
+      <path d="M19 3c1.3 1.3 1.3 3.4 0 4.7L18 8.8V20" />
     </svg>
   )
 }

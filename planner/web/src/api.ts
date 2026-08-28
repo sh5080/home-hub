@@ -111,3 +111,93 @@ export interface Routine {
   checked_by?: number | null
   checked_at?: number | null
 }
+
+// --- 이유식 ---
+
+/** 아이 정보와 계산 기준. 생일은 앱에서 입력한다. */
+export interface BFProfile {
+  name: string
+  birth_date: string | null
+  horizon_days: number
+  today_dday: number | null
+  today: string
+  from_dday: number | null
+  to_dday: number | null
+}
+
+/** 시드 당시의 끼니 구성. "원래 …"를 보여주는 데만 쓴다. */
+export interface BFMealSrc {
+  base: string
+  toppings: string[]
+  snack: string | null
+}
+
+export interface BFMeal {
+  id: number
+  slot: string
+  base: string
+  toppings: string[]
+  snack: string | null
+  src: BFMealSrc
+  /** 지금 값이 시드 원본과 다른가 */
+  edited: boolean
+  eaten_g: number | null
+  served_g: number | null
+  skipped: boolean
+  edited_by: number | null
+  edited_at: number | null
+}
+
+export interface BFDay {
+  dday: number
+  date: string
+  stage: string
+  label: string
+  /** 'topping' = 큐브로 차리는 구간, 'menu' = 요리 이름으로 적힌 구간 */
+  kind: string
+  new_item: string | null
+  new_item_src: string | null
+  note: string
+  meals: BFMeal[]
+}
+
+export interface BFRangeData {
+  profile: BFProfile
+  days: BFDay[]
+}
+
+/** 재료 한 종류와 거기 달린 표시. 반응과 좋아함은 서로 독립이다. */
+export interface BFFood {
+  name: string
+  kind: 'base' | 'cube' | 'dish'
+  reaction: boolean
+  liked: boolean
+  tag_at: number | null
+  tag_by: number | null
+  first_dday: number | null
+  first_date: string
+  uses: number
+}
+
+export interface BFStock {
+  name: string
+  kind: 'base' | 'cube' | 'dish'
+  need: number
+  /** null이면 아직 실사하지 않음 — 0과 구분해야 한다 */
+  stock: number | null
+  make: number
+  count_qty: number | null
+  count_dday: number | null
+  count_at: number | null
+  used: number
+  made: number
+}
+
+export interface BFStockView {
+  from: string
+  to: string
+  from_dday: number
+  to_dday: number
+  horizon_days: number
+  items: BFStock[]
+}

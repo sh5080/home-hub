@@ -22,6 +22,9 @@ type client struct {
 	t   *testing.T
 	srv *httptest.Server
 	jar []*http.Cookie
+	// st는 HTTP로 만들 수 없는 상태(이유식 식단 시드 등)를 테스트가 직접
+	// 넣을 수 있게 열어둔 것이다.
+	st *store.Store
 }
 
 func newClient(t *testing.T) *client {
@@ -40,7 +43,7 @@ func newClient(t *testing.T) *client {
 	h := New(st, slog.New(slog.NewTextHandler(io.Discard, nil)), true)
 	srv := httptest.NewServer(h)
 	t.Cleanup(srv.Close)
-	return &client{t: t, srv: srv}
+	return &client{t: t, srv: srv, st: st}
 }
 
 // do sends a JSON request with the session cookie and decodes into out (if non-nil).
@@ -502,3 +505,121 @@ func TestQuotaEnforcement(t *testing.T) {
 	st.SetQuota(store.DefaultQuota)
 	c.must("POST", "/api/columns/"+itoa(col)+"/cards", map[string]any{"title": "다시 됨"}, nil, 201)
 }
+
+// 이유식 픽스처는 지어낸 것이다. 실제 식단 데이터는 저장소에 두지 않는다.
+const bfTestPlan = `{
+ "schema": 1,
+ "default_track": ["t1"],
+ "plans": [{"id":"t1","label":"시험구간","kind":"topping","from":100,"to":101,"days":[
+   {"d":100,"new":"가재료","meals":[{"slot":"아침","base":"베이스A","toppings":["가재료","나재료"],"snack":null}]},
+   {"d":101,"meals":[{"slot":"아침","base":"베이스A","toppings":["가재료"],"snack":"나재료"}]}
+ ]}],
+ "ingredients": [{"name":"베이스A","kind":"base"},{"name":"가재료","kind":"cube"},{"name":"나재료","kind":"cube"}]
+}`
+
+func TestBabyfoodAPI(t *testing.T) {
+	c := newClient(t)
+	c.must("GET", "/api/babyfood/profile", nil, nil, 401)
+	c.must("POST", "/api/login", map[string]string{"name": "테스트1", "password": "pass1234"}, nil, 200)
+
+	f, err := store.ParseBFPlan([]byte(bfTestPlan))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.st.BFImport(context.Background(), f, nil, true, false, 0); err != nil {
+		t.Fatal(err)
+	}
+
+	// 생일 전에는 재고를 계산할 수 없다 — 날짜를 모르기 때문이다.
+	c.must("GET", "/api/babyfood/stock", nil, nil, 400)
+
+	// 생일을 넣으면 D+100 이 그 날짜가 된다.
+	birth := time.Now().AddDate(0, 0, -100).Format("2006-01-02")
+	var p store.BFProfile
+	c.must("PATCH", "/api/babyfood/profile", map[string]any{"birth_date": birth, "horizon_days": 2}, &p, 200)
+	if p.TodayDDay == nil || *p.TodayDDay != 100 {
+		t.Fatalf("today_dday = %v, want 100", p.TodayDDay)
+	}
+
+	from := birth
+	to := time.Now().AddDate(0, 0, 1).Format("2006-01-02")
+	var rng struct {
+		Profile store.BFProfile `json:"profile"`
+		Days    []store.BFDay   `json:"days"`
+	}
+	c.must("GET", "/api/babyfood?from="+from+"&to="+to, nil, &rng, 200)
+	if len(rng.Days) != 2 {
+		t.Fatalf("days = %d, want 2", len(rng.Days))
+	}
+	meal := rng.Days[0].Meals[0]
+	if meal.Edited {
+		t.Fatal("갓 넣은 끼니가 '수정됨'이다")
+	}
+
+	// 고치면 원본이 남고 되돌릴 수 있다.
+	var day store.BFDay
+	c.must("PATCH", "/api/babyfood/meals/"+itoa(meal.ID), map[string]any{"toppings": []string{"다재료"}}, &day, 200)
+	if !day.Meals[0].Edited || len(day.Meals[0].Src.Toppings) != 2 {
+		t.Fatalf("수정 후: edited=%v src=%v", day.Meals[0].Edited, day.Meals[0].Src.Toppings)
+	}
+	c.must("PATCH", "/api/babyfood/meals/"+itoa(meal.ID), map[string]any{"reset": true}, &day, 200)
+	if day.Meals[0].Edited {
+		t.Fatal("되돌렸는데 '수정됨'이 남아 있다")
+	}
+
+	// 알레르기 반응·좋아함은 날짜가 아니라 재료에 붙는다.
+	var foods []store.BFFood
+	c.must("GET", "/api/babyfood/foods", nil, &foods, 200)
+	have := map[string]bool{}
+	for _, f := range foods {
+		have[f.Name] = true
+	}
+	// 위에서 고칠 때 쓴 '다재료'도 재료 목록에 들어와 있다 — 식단에 없던
+	// 재료를 적어도 목록에서 사라지지 않아야 표시를 달 수 있다.
+	for _, want := range []string{"베이스A", "가재료", "나재료", "다재료"} {
+		if !have[want] {
+			t.Fatalf("%s 가 재료 목록에 없다: %+v", want, foods)
+		}
+	}
+	var tagged store.BFFood
+	c.must("POST", "/api/babyfood/foods/tag", map[string]any{"name": "가재료", "reaction": true}, &tagged, 200)
+	if !tagged.Reaction || tagged.Liked {
+		t.Fatalf("reaction 만 켜야 한다: %+v", tagged)
+	}
+	// 둘은 독립이다 — 좋아함을 켜도 반응은 그대로 남는다.
+	c.must("POST", "/api/babyfood/foods/tag", map[string]any{"name": "가재료", "liked": true}, &tagged, 200)
+	if !tagged.Reaction || !tagged.Liked {
+		t.Fatalf("둘 다 켜져 있어야 한다: %+v", tagged)
+	}
+	if tagged.FirstDDay == nil || *tagged.FirstDDay != 100 {
+		t.Fatalf("처음 나온 날 = %v, want 100", tagged.FirstDDay)
+	}
+	c.must("POST", "/api/babyfood/foods/tag", map[string]any{"name": "없는재료", "liked": true}, nil, 404)
+	c.must("POST", "/api/babyfood/foods/tag", map[string]any{"name": "가재료"}, nil, 400)
+
+	// 재고: 실사 전에는 '모름', 실사하면 숫자가 된다.
+	var view store.BFStockView
+	c.must("GET", "/api/babyfood/stock", nil, &view, 200)
+	find := func(name string) store.BFStock {
+		for _, it := range view.Items {
+			if it.Name == name {
+				return it
+			}
+		}
+		t.Fatalf("%s 가 재고 목록에 없다", name)
+		return store.BFStock{}
+	}
+	if got := find("가재료"); got.Need != 2 || got.Stock != nil || got.Make != 2 {
+		t.Fatalf("가재료 = %+v", got)
+	}
+	c.must("POST", "/api/babyfood/stock/count", map[string]any{"name": "가재료", "qty": 5}, nil, 204)
+	c.must("POST", "/api/babyfood/stock/batch", map[string]any{"name": "가재료", "qty": 3, "note": "만듦"}, nil, 204)
+	c.must("GET", "/api/babyfood/stock", nil, &view, 200)
+	if got := find("가재료"); got.Stock == nil || *got.Stock != 8 || got.Make != 0 {
+		t.Fatalf("실사 5 + 제조 3 = 8 이어야 한다: %+v", got)
+	}
+
+	// 모르는 하위 경로는 SPA가 아니라 JSON 404여야 한다.
+	c.must("GET", "/api/babyfood/nope", nil, nil, 404)
+}
+
