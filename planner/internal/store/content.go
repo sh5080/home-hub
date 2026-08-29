@@ -145,3 +145,45 @@ func PlainToContent(text string) string {
 	b, _ := json.Marshal(out)
 	return string(b)
 }
+
+// ChecklistContent은 안내 문단 하나와 체크리스트로 블록 문서를 만든다.
+//
+// 블록 문서 형식을 아는 곳은 서버 한 곳이어야 한다. 화면에서 JSON을 조립하면
+// 편집기를 바꿀 때 두 군데를 고쳐야 하고, 한 글자만 틀려도 ValidateContent가
+// 거절해 사용자에게는 이유 없는 "저장 실패"로만 보인다.
+func ChecklistContent(note string, items []string) string {
+	type inline struct {
+		Type   string            `json:"type"`
+		Text   string            `json:"text"`
+		Styles map[string]string `json:"styles"`
+	}
+	type outBlock struct {
+		Type     string         `json:"type"`
+		Props    map[string]any `json:"props"`
+		Content  []inline       `json:"content"`
+		Children []outBlock     `json:"children"`
+	}
+	text := func(s string) []inline {
+		if s == "" {
+			return []inline{}
+		}
+		return []inline{{Type: "text", Text: s, Styles: map[string]string{}}}
+	}
+	out := make([]outBlock, 0, len(items)+1)
+	if note != "" {
+		out = append(out, outBlock{Type: "paragraph", Props: map[string]any{}, Content: text(note), Children: []outBlock{}})
+	}
+	for _, it := range items {
+		out = append(out, outBlock{
+			Type:     "checkListItem",
+			Props:    map[string]any{"checked": false},
+			Content:  text(it),
+			Children: []outBlock{},
+		})
+	}
+	if len(out) == 0 {
+		out = append(out, outBlock{Type: "paragraph", Props: map[string]any{}, Content: []inline{}, Children: []outBlock{}})
+	}
+	b, _ := json.Marshal(out)
+	return string(b)
+}

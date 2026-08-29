@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router'
-import { api, type BFStock } from '../api'
+import { api, type BFStock, type Card } from '../api'
 import { useBFStock, useInvalidating } from '../lib/hooks'
 import { fmtDate } from '../lib/date'
 import { Button, Field, Input, PageHeader, Sheet, SkeletonList } from '../components/ui'
@@ -25,6 +25,12 @@ export default function BabyfoodStock() {
     (body: { name: string; qty: number; note: string }) => api.post('/api/babyfood/stock/batch', body),
     [['babyfood-stock']],
   )
+  // 재고 화면에서 끝나지 않고 칸반으로 넘긴다. 본문(체크리스트)은 서버가 만든다.
+  const makeCard = useInvalidating(
+    () => api.post<Card>('/api/babyfood/stock/shopping', {}),
+    [['boards'], ['board'], ['today'], ['calendar']],
+  )
+  const [cardErr, setCardErr] = useState<string | null>(null)
 
   const items = (q.data?.items ?? []).filter((i) => i.need > 0 || i.stock != null)
   const shown = onlyNeeded ? items.filter((i) => i.make > 0) : items
@@ -105,6 +111,30 @@ export default function BabyfoodStock() {
         <p className="px-4 py-10 text-center text-sm text-slate-400">
           {onlyNeeded ? '만들어야 할 게 없어요' : '재료가 없어요'}
         </p>
+      )}
+
+      {q.data && shown.some((i) => i.make > 0) && (
+        <div className="px-4 pt-6">
+          <Button
+            className="w-full"
+            disabled={makeCard.isPending}
+            onClick={async () => {
+              setCardErr(null)
+              try {
+                const card = await makeCard.mutateAsync(undefined)
+                nav(`/cards/${card.id}`)
+              } catch (e) {
+                setCardErr(e instanceof Error ? e.message : '만들지 못했어요')
+              }
+            }}
+          >
+            {makeCard.isPending ? '만드는 중…' : '장보기 카드 만들기'}
+          </Button>
+          <p className="mt-1.5 text-center text-[11px] text-slate-400">
+            만들어야 할 것들이 체크리스트로 들어간 할 일 카드가 생겨요
+          </p>
+          {cardErr && <p className="mt-1 text-center text-xs text-rose-500">{cardErr}</p>}
+        </div>
       )}
 
       <Sheet open={!!target} onClose={() => setTarget(null)} title={target?.name}>

@@ -1,8 +1,8 @@
 import { useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router'
 import { useQueryClient } from '@tanstack/react-query'
-import { api } from '../api'
-import { useCalendar, useInvalidating, useMe, useToday, useUsers } from '../lib/hooks'
+import { api, type BFRangeData } from '../api'
+import { useBabyfood, useCalendar, useInvalidating, useMe, useToday, useUsers } from '../lib/hooks'
 import { addDays, ampm, fmtDate, fmtDue, fmtTime, hasTime, today, weekdayIndex, WEEKDAYS } from '../lib/date'
 import { Avatar, Button, Field, Input, PasswordInput, PageHeader, Sheet, SkeletonList } from '../components/ui'
 import SortToggle, { Stars } from '../components/SortToggle'
@@ -22,6 +22,8 @@ export default function Dashboard() {
   // 마감·높은 중요도가 위에 오는 게 늘 맞다. 역순은 보드에서 쓴다.
   const day = useToday(todayStr, sort)
   const week = useCalendar(todayStr, addDays(todayStr, 7))
+  // 이유식은 별도 탭이지만 '오늘 뭘 먹이나'는 홈에서 바로 보여야 한다.
+  const bf = useBabyfood(todayStr, todayStr)
   // 이유식 탭이 생일 입력을 요구할 때 ?settings=1 로 보낸다.
   const [params, setParams] = useSearchParams()
   const [settings, setSettings] = useState(() => params.get('settings') != null)
@@ -133,6 +135,8 @@ export default function Dashboard() {
           </ul>
         </section>
 
+        <TodayMeals data={bf.data} />
+
         <section>
           <div className="mb-2 flex items-baseline justify-between">
             <h2 className="text-base font-bold">앞으로 7일</h2>
@@ -179,6 +183,38 @@ function TodoRow({ checked, onToggle, title, meta, metaTone, tag, avatar, href, 
         <div className="flex min-w-0 flex-1 items-center gap-2">{body}</div>
       )}
     </div>
+  )
+}
+
+// 오늘 이유식 한 줄. 생일을 안 넣었거나 그날 식단이 없으면 아무것도 안 그린다 —
+// 이유식을 안 쓰는 사람의 홈에 빈 칸이 생기면 안 된다.
+function TodayMeals({ data }: { data?: BFRangeData }) {
+  const day = data?.days?.[0]
+  if (!data?.profile.birth_date || !day) return null
+  return (
+    <section>
+      <div className="mb-2 flex items-baseline justify-between">
+        <h2 className="text-base font-bold">오늘 이유식</h2>
+        <Link to="/babyfood" className="text-xs text-slate-400">이유식 ›</Link>
+      </div>
+      <Link to="/babyfood" className="block rounded-xl bg-white p-3 shadow-sm active:bg-slate-50">
+        <p className="mb-1.5 text-[11px] text-slate-400">D+{day.dday} · {day.label}</p>
+        <ul className="space-y-1">
+          {day.meals.map((m) => (
+            <li key={m.id} className="flex gap-2 text-sm">
+              <span className="w-8 shrink-0 text-slate-400">{m.slot}</span>
+              <span className="min-w-0 flex-1 truncate">
+                {m.base}
+                {m.toppings.length > 0 && <span className="text-slate-500"> · {m.toppings.join(' ')}</span>}
+              </span>
+            </li>
+          ))}
+        </ul>
+        {day.new_item && (
+          <p className="mt-1.5 text-[11px] font-medium text-amber-700">처음 먹는 재료 · {day.new_item}</p>
+        )}
+      </Link>
+    </section>
   )
 }
 

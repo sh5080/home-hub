@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 )
@@ -85,18 +86,18 @@ type BFDay struct {
 // BFStock은 재료 한 줄이다. 재고가 어떻게 그 숫자가 됐는지 구성요소를 전부
 // 같이 준다 — 조용히 틀어지지 않게 하는 게 이 설계의 요점이다.
 type BFStock struct {
-	Name string `json:"name"`
-	Kind string `json:"kind"`
-	Need int    `json:"need"`  // 기간 내 필요 개수
-	Stock *int  `json:"stock"` // nil이면 아직 실사 안 함
-	Make  int   `json:"make"`  // 제조 필요 = max(0, need - stock)
+	Name  string `json:"name"`
+	Kind  string `json:"kind"`
+	Need  int    `json:"need"`  // 기간 내 필요 개수
+	Stock *int   `json:"stock"` // nil이면 아직 실사 안 함
+	Make  int    `json:"make"`  // 제조 필요 = max(0, need - stock)
 
-	CountQty  *int   `json:"count_qty"`
-	CountDDay *int   `json:"count_dday"`
-	CountAt   *int64 `json:"count_at"`
+	CountQty     *int   `json:"count_qty"`
+	CountDDay    *int   `json:"count_dday"`
+	CountAt      *int64 `json:"count_at"`
 	countBatchID int64
-	Used      int    `json:"used"` // 실사 다음날 ~ 어제 소모
-	Made      int    `json:"made"` // 실사 이후 제조
+	Used         int `json:"used"` // 실사 다음날 ~ 어제 소모
+	Made         int `json:"made"` // 실사 이후 제조
 }
 
 // BFStockView는 재고 화면 전체다.
@@ -1018,4 +1019,63 @@ func boolInt(b bool) int {
 		return 1
 	}
 	return 0
+}
+
+// --- 재고를 할 일로 ---
+
+// BFShoppingCard는 기간 내 '제조 필요'를 장보기 카드 한 장으로 만든다.
+//
+// 재고 화면이 "소고기 21, 당근 21"까지 알려주고 끝나면 그 숫자를 사람이
+// 머리로 옮겨 적어야 한다. 카드로 만들어 두면 칸반·홈·캘린더에 그대로
+// 나타나고, 체크하면서 장을 볼 수 있다.
+func (s *Store) BFShoppingCard(ctx context.Context, horizon int, userID int64) (Card, error) {
+	view, err := s.BFStockList(ctx, horizon)
+	if err != nil {
+		return Card{}, err
+	}
+	// 많이 필요한 것부터. 장 볼 때 큰 것을 먼저 챙긴다.
+	need := make([]BFStock, 0, len(view.Items))
+	for _, it := range view.Items {
+		if it.Make > 0 {
+			need = append(need, it)
+		}
+	}
+	if len(need) == 0 {
+		return Card{}, invalid("지금은 만들어야 할 게 없어요")
+	}
+	sort.Slice(need, func(i, j int) bool {
+		if need[i].Make != need[j].Make {
+			return need[i].Make > need[j].Make
+		}
+		return need[i].Name < need[j].Name
+	})
+	items := make([]string, 0, len(need))
+	for _, it := range need {
+		items = append(items, fmt.Sprintf("%s %d개", it.Name, it.Make))
+	}
+
+	col, err := s.firstColumn(ctx)
+	if err != nil {
+		return Card{}, err
+	}
+	title := "이유식 장보기"
+	note := fmt.Sprintf("%s ~ %s (%d일치) 기준이에요. 냉동실을 다시 세면 숫자가 바뀝니다.",
+		view.From, view.To, view.HorizonDays)
+	content := ChecklistContent(note, items)
+	due := bfToday()
+	return s.CreateCard(ctx, col, CardInput{Title: &title, Content: &content, DueAt: &due}, userID)
+}
+
+// firstColumn은 첫 보드의 첫 컬럼('할 일')이다. 보드 규칙은 이름이 아니라
+// 위치로 정해져 있다 — README의 칸반 규칙과 같은 근거를 쓴다.
+func (s *Store) firstColumn(ctx context.Context) (int64, error) {
+	var id int64
+	err := s.db.QueryRowContext(ctx, `
+		SELECT c.id FROM columns c
+		  JOIN boards b ON b.id = c.board_id
+		 ORDER BY b.id, c.position LIMIT 1`).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, invalid("보드가 없어요")
+	}
+	return id, err
 }

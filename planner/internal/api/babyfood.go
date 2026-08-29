@@ -19,6 +19,7 @@ func (s *Server) registerBabyfood(m *http.ServeMux) {
 	m.HandleFunc("GET /api/babyfood/stock", s.babyfoodStock)
 	m.HandleFunc("POST /api/babyfood/stock/count", s.babyfoodCount)
 	m.HandleFunc("POST /api/babyfood/stock/batch", s.babyfoodBatch)
+	m.HandleFunc("POST /api/babyfood/stock/shopping", s.babyfoodShopping)
 }
 
 // GET /api/babyfood?from=YYYY-MM-DD&to=YYYY-MM-DD
@@ -233,4 +234,26 @@ func (s *Server) babyfoodBatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+type bfShoppingReq struct {
+	Days int `json:"days"`
+}
+
+// POST /api/babyfood/stock/shopping — '제조 필요'를 장보기 카드로 만든다.
+// 재고 화면에서 끝나지 않고 칸반·홈·캘린더로 이어지게 하는 지점이다.
+func (s *Server) babyfoodShopping(w http.ResponseWriter, r *http.Request) {
+	if s.quotaBlocked(w, r) {
+		return
+	}
+	var req bfShoppingReq
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	u, _ := auth.UserFrom(r.Context())
+	card, err := s.st.BFShoppingCard(r.Context(), req.Days, u.ID)
+	if s.storeErr(w, err, "babyfood shopping card") {
+		return
+	}
+	writeJSON(w, http.StatusCreated, card)
 }

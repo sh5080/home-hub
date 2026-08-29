@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 )
@@ -363,5 +364,51 @@ func TestBFImportFromDDayOnly(t *testing.T) {
 	days, _ = s.BFRange(ctx, 100, 100)
 	if got := days[0].Meals[0].Toppings; len(got) != 1 || got[0] != "손으로고친것" {
 		t.Fatalf("지나간 날이 덮어써졌다: %v", got)
+	}
+}
+
+// 재고에서 장보기 카드로 넘어가는 길. 카드 본문은 서버가 만들므로
+// 편집기가 받아들이는 형식인지도 같이 본다.
+func TestBFShoppingCard(t *testing.T) {
+	s, uid := newBFStore(t)
+	ctx := context.Background()
+	seedBabyfood(t, s)
+	birth := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC).AddDate(0, 0, -100).Format("2006-01-02")
+	freezeToday(t, "2026-01-03") // D+102
+	if _, err := s.BFProfileSet(ctx, BFProfileInput{BirthDate: &birth}); err != nil {
+		t.Fatal(err)
+	}
+
+	card, err := s.BFShoppingCard(ctx, 3, uid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if card.Title != "이유식 장보기" {
+		t.Fatalf("제목 = %q", card.Title)
+	}
+	if card.DueAt == nil || *card.DueAt != "2026-01-03" {
+		t.Fatalf("마감 = %v, 오늘이어야 한다", card.DueAt)
+	}
+	if card.Content == nil {
+		t.Fatal("본문이 없다")
+	}
+	plain, err := ValidateContent(*card.Content)
+	if err != nil {
+		t.Fatalf("본문을 서버가 거절했다: %v", err)
+	}
+	for _, want := range []string{"가재료 1개", "나재료 1개"} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("%q 가 본문에 없다: %q", want, plain)
+		}
+	}
+
+	// 전부 채워두면 만들 게 없다 — 빈 카드를 만들지 않고 거절한다.
+	for _, n := range []string{"가재료", "나재료", "다재료", "베이스A", "베이스B"} {
+		if err := s.BFCount(ctx, n, 99, uid); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := s.BFShoppingCard(ctx, 3, uid); err == nil {
+		t.Fatal("만들 게 없는데 카드를 만들었다")
 	}
 }
