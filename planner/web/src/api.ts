@@ -114,6 +114,15 @@ export interface Routine {
 
 // --- 이유식 ---
 
+/** 검색 결과 한 줄. 어느 보드의 어느 칸인지까지 온다. */
+export interface SearchResult extends Omit<Card, 'content'> {
+  board_id: number
+  board_name: string
+  column_name: string
+  /** 본문에서 검색어 주변을 잘라낸 것. 제목에만 맞으면 빈 문자열. */
+  snippet: string
+}
+
 /** 아이 정보와 계산 기준. 생일은 앱에서 입력한다. */
 export interface BFProfile {
   name: string

@@ -13,6 +13,7 @@ import Babyfood from './pages/Babyfood'
 import BabyfoodStock from './pages/BabyfoodStock'
 import BabyfoodFoods from './pages/BabyfoodFoods'
 import CardPage from './pages/CardPage'
+import Search from './pages/Search'
 
 export default function App() {
   return (
@@ -24,6 +25,7 @@ export default function App() {
           <Route path="boards" element={<Board />} />
           <Route path="boards/:id" element={<Board />} />
           <Route path="cards/:id" element={<CardPage />} />
+          <Route path="search" element={<Search />} />
           <Route path="calendar" element={<Calendar />} />
           <Route path="routines" element={<Routines />} />
           <Route path="babyfood" element={<Babyfood />} />

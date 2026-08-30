@@ -623,3 +623,29 @@ func TestBabyfoodAPI(t *testing.T) {
 	c.must("GET", "/api/babyfood/nope", nil, nil, 404)
 }
 
+func TestSearch(t *testing.T) {
+	c := newClient(t)
+	c.must("GET", "/api/search?q=%EA%B3%A0%EA%B8%B0", nil, nil, 401)
+	c.must("POST", "/api/login", map[string]string{"name": "테스트1", "password": "pass1234"}, nil, 200)
+
+	var d store.BoardDetail
+	c.must("GET", "/api/boards/1", nil, &d, 200)
+	col := d.Columns[0].ID
+	c.must("POST", "/api/columns/"+itoa(col)+"/cards", map[string]any{"title": "소고기 장보기"}, nil, 201)
+	c.must("POST", "/api/columns/"+itoa(col)+"/cards", map[string]any{"title": "어린이집 상담"}, nil, 201)
+
+	var got []store.SearchResult
+	// '고기' (두 글자 부분어)
+	c.must("GET", "/api/search?q=%EA%B3%A0%EA%B8%B0", nil, &got, 200)
+	if len(got) != 1 || got[0].Title != "소고기 장보기" {
+		t.Fatalf("검색 결과 = %+v", got)
+	}
+	if got[0].BoardName == "" || got[0].ColumnName == "" {
+		t.Fatalf("위치 정보가 없다: %+v", got[0])
+	}
+	// 빈 질의는 빈 목록이다 — 전체 목록이 쏟아지면 안 된다.
+	c.must("GET", "/api/search?q=", nil, &got, 200)
+	if len(got) != 0 {
+		t.Fatalf("빈 질의에 %d건", len(got))
+	}
+}

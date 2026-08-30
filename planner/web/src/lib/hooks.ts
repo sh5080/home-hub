@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { api, type BFFood, type BFProfile, type BFRangeData, type BFStockView, type Board, type BoardDetail, type Card, type Routine, type User } from '../api'
+import { api, type BFFood, type BFProfile, type BFRangeData, type BFStockView, type SearchResult, type Board, type BoardDetail, type Card, type Routine, type User } from '../api'
 
 export function useMe() {
   return useQuery({ queryKey: ['me'], queryFn: () => api.get<User>('/api/me'), staleTime: Infinity })
@@ -66,6 +66,17 @@ export function useInvalidating<TArgs, TResult = unknown>(fn: (args: TArgs) => P
   return useMutation<TResult, Error, TArgs>({
     mutationFn: fn,
     onSettled: () => keys.forEach((k) => qc.invalidateQueries({ queryKey: k })),
+  })
+}
+
+/** 빈 질의는 서버에 묻지 않는다 — 결과가 어차피 비어 있다. */
+export function useSearch(q: string) {
+  const term = q.trim()
+  return useQuery({
+    queryKey: ['search', term],
+    queryFn: () => api.get<SearchResult[]>(`/api/search?q=${encodeURIComponent(term)}`),
+    enabled: term !== '',
+    staleTime: 30_000,
   })
 }
 

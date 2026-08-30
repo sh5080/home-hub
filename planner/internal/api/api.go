@@ -57,13 +57,14 @@ func NewWithHub(st *store.Store, log *slog.Logger, dev bool) (http.Handler, inte
 	s.registerBabyfood(authed)
 	authed.HandleFunc("GET /api/stream", s.stream)
 	authed.HandleFunc("GET /api/storage", s.storage)
+	authed.HandleFunc("GET /api/search", s.search)
 	authed.HandleFunc("/", notFound) // inner mux must also answer JSON, never the stdlib HTML 404
 	// 변경 알림은 미들웨어 한 곳에서 — 핸들러마다 넣으면 빠뜨린다.
 	gated := auth.Middleware(st, s.broadcastOnWrite(authed))
 	for _, p := range []string{
 		"/api/logout", "/api/me", "/api/users", "/api/users/",
 		"/api/boards", "/api/boards/", "/api/columns/", "/api/cards/",
-		"/api/routines", "/api/routines/", "/api/calendar", "/api/today", "/api/stream", "/api/storage",
+		"/api/routines", "/api/routines/", "/api/calendar", "/api/today", "/api/stream", "/api/storage", "/api/search",
 		"/api/babyfood", "/api/babyfood/",
 	} {
 		mux.Handle(p, gated)
