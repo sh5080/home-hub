@@ -327,6 +327,7 @@ function Backlog({ columns, userName, onAdd, onOpen }: { columns: Column[]; user
             <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-500">{col.name}</span>
             <Stars n={c.priority} />
             {c.due_at && <DueBadge due={c.due_at} />}
+            {c.recur && <RecurBadge label={c.recur_label} />}
           </div>
         </div>
         {name && <Avatar name={name} />}
@@ -471,10 +472,11 @@ function CardTile({ card, userName, onClick, lifted, grip, wide }: { card: Card;
       <button onClick={onClick} className="min-w-0 flex-1 text-left active:opacity-70">
         <p className={`font-medium leading-snug break-words ${wide ? 'text-sm' : 'text-[13px]'}`}>{card.title}</p>
         {wide && card.description && <p className="mt-0.5 line-clamp-2 text-xs text-slate-400">{card.description}</p>}
-        {(card.due_at || name || card.priority > 0) && (
+        {(card.due_at || name || card.priority > 0 || card.recur) && (
           <div className="mt-1.5 flex flex-wrap items-center gap-1">
             <Stars n={card.priority} />
             {card.due_at && <DueBadge due={card.due_at} />}
+            {card.recur && <RecurBadge label={card.recur_label} />}
             {name && <Avatar name={name} />}
           </div>
         )}
@@ -507,5 +509,18 @@ function QuickAdd({ colName, onSubmit, onClose }: { colName: string; onSubmit: (
         <Button type="submit" disabled={!title.trim() || busy}>{busy ? '여는 중…' : '추가하고 열기'}</Button>
       </div>
     </form>
+  )
+}
+
+/** 반복 카드 표시. 완료하면 다음 회차가 자동으로 생긴다는 신호다. */
+function RecurBadge({ label }: { label: string }) {
+  return (
+    <span className="inline-flex shrink-0 items-center gap-0.5 rounded-md bg-slate-100 px-1.5 py-0.5 text-[11px] text-slate-500">
+      <svg viewBox="0 0 24 24" className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M17 2l4 4-4 4" /><path d="M3 11V9a4 4 0 0 1 4-4h14" />
+        <path d="M7 22l-4-4 4-4" /><path d="M21 13v2a4 4 0 0 1-4 4H3" />
+      </svg>
+      {label}
+    </span>
   )
 }

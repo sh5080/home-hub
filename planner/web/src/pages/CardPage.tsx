@@ -117,7 +117,18 @@ export default function CardPage() {
           <Prop icon={<IconCalendar />} label="마감">
             <DueInput initial={card.due_at} onChange={(v) => queueSave({ due_at: v })} />
           </Prop>
+          <Prop icon={<IconRepeat />} label="반복">
+            <RecurPicker
+              value={card.recur}
+              label={card.recur_label}
+              hasDue={!!card.due_at}
+              onChange={(v) => queueSave({ recur: v })}
+            />
+          </Prop>
         </dl>
+        {card.recur_parent_id && (
+          <p className="mt-2 text-[11px] text-slate-400">이전 회차에서 이어진 카드예요</p>
+        )}
 
         {/* 본문 */}
         <div className="mt-4">
@@ -125,6 +136,58 @@ export default function CardPage() {
         </div>
       </div>
     </div>
+  )
+}
+
+/**
+ * 반복 설정.
+ *
+ * 규칙 문자열을 직접 치게 하지 않는다. 고를 수 있는 것만 두면 잘못된 규칙이
+ * 서버까지 갈 일이 없고, 폰에서 타이핑할 일도 없다. 요일·날짜처럼 값이 필요한
+ * 규칙은 마감 날짜에서 끌어온다 — "매월 15일"의 15는 마감이 15일이라는 뜻이다.
+ */
+function RecurPicker({ value, label, hasDue, onChange }: {
+  value: string | null
+  label: string
+  hasDue: boolean
+  onChange: (v: string) => void
+}) {
+  if (!hasDue) {
+    return <span className="text-sm text-slate-400">마감을 먼저 정해주세요</span>
+  }
+  const options = [
+    { v: '', t: '안 함' },
+    { v: 'daily', t: '매일' },
+    { v: 'weekly', t: '매주' },
+    { v: 'monthly', t: '매월' },
+    { v: 'yearly', t: '매년' },
+  ]
+  // 저장된 규칙이 어느 갈래인지
+  const kind = value ? value.split(':')[0] : ''
+  return (
+    <div className="flex flex-wrap items-center gap-1">
+      {options.map((o) => (
+        <button
+          key={o.v}
+          onClick={() => onChange(o.v)}
+          className={`rounded-lg px-2 py-1 text-xs font-medium ${
+            kind === o.v || (o.v === '' && !value) ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-500'
+          }`}
+        >
+          {o.t}
+        </button>
+      ))}
+      {label && <span className="ml-1 text-xs text-slate-400">{label}</span>}
+    </div>
+  )
+}
+
+function IconRepeat() {
+  return (
+    <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M17 2l4 4-4 4" /><path d="M3 11V9a4 4 0 0 1 4-4h14" />
+      <path d="M7 22l-4-4 4-4" /><path d="M21 13v2a4 4 0 0 1-4 4H3" />
+    </svg>
   )
 }
 

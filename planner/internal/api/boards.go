@@ -168,6 +168,8 @@ type cardReq struct {
 	Content    *string `json:"content"` // 블록 문서 JSON. description은 서버가 파생한다.
 	DueAt      *string `json:"due_at"`  // 'YYYY-MM-DD' 또는 'YYYY-MM-DDTHH:MM'
 	EndAt      *string `json:"end_at"`  // 여러 날 항목의 끝
+	Recur      *string `json:"recur"`   // 반복 규칙. store/recur.go
+	RecurUntil *string `json:"recur_until"`
 	Priority   *int    `json:"priority"`
 	AssigneeID *int64  `json:"assignee_id"`
 	ColumnID   *int64  `json:"column_id"`
@@ -175,7 +177,7 @@ type cardReq struct {
 }
 
 func (r cardReq) input() store.CardInput {
-	return store.CardInput{Title: r.Title, Content: r.Content, DueAt: r.DueAt, EndAt: r.EndAt, AssigneeID: r.AssigneeID, Priority: r.Priority}
+	return store.CardInput{Title: r.Title, Content: r.Content, DueAt: r.DueAt, EndAt: r.EndAt, Recur: r.Recur, RecurUntil: r.RecurUntil, AssigneeID: r.AssigneeID, Priority: r.Priority}
 }
 
 // quotaBlocked는 한도를 넘었으면 507을 쓰고 true를 돌려준다.

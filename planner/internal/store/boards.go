@@ -34,13 +34,19 @@ type Card struct {
 	Description string  `json:"description"` // content에서 파생한 평문 (미리보기·검색용)
 	Content     *string `json:"content"`     // 권위 있는 본문. 블록 문서 JSON
 	Position    int     `json:"position"`
-	DueAt       *string `json:"due_at"`   // 'YYYY-MM-DD' 또는 'YYYY-MM-DDTHH:MM'
-	EndAt       *string `json:"end_at"`   // 여러 날 항목의 끝. 없으면 하루짜리
-	Priority    int     `json:"priority"` // 0=없음, 1~3
-	AssigneeID  *int64  `json:"assignee_id"`
-	CreatedBy   int64   `json:"created_by"`
-	CreatedAt   int64   `json:"created_at"`
-	UpdatedAt   int64   `json:"updated_at"`
+	DueAt       *string `json:"due_at"` // 'YYYY-MM-DD' 또는 'YYYY-MM-DDTHH:MM'
+	EndAt       *string `json:"end_at"` // 여러 날 항목의 끝. 없으면 하루짜리
+	// 반복 규칙. 자세한 형식은 store/recur.go.
+	Recur         *string `json:"recur"`
+	RecurUntil    *string `json:"recur_until"`
+	RecurParentID *int64  `json:"recur_parent_id"`
+	// RecurLabel은 규칙을 사람이 읽는 말로 옮긴 것. 해석을 서버에 둔다.
+	RecurLabel string `json:"recur_label"`
+	Priority   int    `json:"priority"` // 0=없음, 1~3
+	AssigneeID *int64 `json:"assignee_id"`
+	CreatedBy  int64  `json:"created_by"`
+	CreatedAt  int64  `json:"created_at"`
+	UpdatedAt  int64  `json:"updated_at"`
 }
 
 // BoardDetail is what the board page renders in one request.
@@ -164,7 +170,7 @@ func (s *Store) GetBoard(ctx context.Context, id int64, sortBy Sort, order Order
 	}
 
 	cards, err := s.db.QueryContext(ctx, `
-		SELECT c.id, c.column_id, c.title, c.description, c.content, c.position, c.due_at, c.end_at, c.priority, c.assignee_id, c.created_by, c.created_at, c.updated_at
+		SELECT c.id, c.column_id, c.title, c.description, c.content, c.position, c.due_at, c.end_at, c.priority, c.assignee_id, c.created_by, c.created_at, c.updated_at, c.recur, c.recur_until, c.recur_parent_id
 		FROM cards c JOIN columns col ON col.id = c.column_id
 		WHERE col.board_id=? ORDER BY c.column_id, `+orderBy(sortBy, order, "c."), id)
 	if err != nil {
@@ -173,9 +179,10 @@ func (s *Store) GetBoard(ctx context.Context, id int64, sortBy Sort, order Order
 	defer cards.Close()
 	for cards.Next() {
 		var c Card
-		if err := cards.Scan(&c.ID, &c.ColumnID, &c.Title, &c.Description, &c.Content, &c.Position, &c.DueAt, &c.EndAt, &c.Priority, &c.AssigneeID, &c.CreatedBy, &c.CreatedAt, &c.UpdatedAt); err != nil {
+		if err := cards.Scan(&c.ID, &c.ColumnID, &c.Title, &c.Description, &c.Content, &c.Position, &c.DueAt, &c.EndAt, &c.Priority, &c.AssigneeID, &c.CreatedBy, &c.CreatedAt, &c.UpdatedAt, &c.Recur, &c.RecurUntil, &c.RecurParentID); err != nil {
 			return d, err
 		}
+		fillRecurLabel(&c)
 		if i, ok := byID[c.ColumnID]; ok {
 			d.Columns[i].Cards = append(d.Columns[i].Cards, c)
 		}

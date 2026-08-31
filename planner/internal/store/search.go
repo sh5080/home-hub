@@ -70,6 +70,7 @@ func (s *Store) SearchCards(ctx context.Context, q string) ([]SearchResult, erro
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT c.id, c.column_id, c.title, c.description, c.content, c.position,
 		       c.due_at, c.end_at, c.priority, c.assignee_id, c.created_by, c.created_at, c.updated_at,
+		       c.recur, c.recur_until, c.recur_parent_id,
 		       b.id, b.name, col.name
 		  FROM cards c
 		  JOIN columns col ON col.id = c.column_id
@@ -87,6 +88,7 @@ func (s *Store) SearchCards(ctx context.Context, q string) ([]SearchResult, erro
 		var r SearchResult
 		if err := rows.Scan(&r.ID, &r.ColumnID, &r.Title, &r.Description, &r.Content, &r.Position,
 			&r.DueAt, &r.EndAt, &r.Priority, &r.AssigneeID, &r.CreatedBy, &r.CreatedAt, &r.UpdatedAt,
+			&r.Recur, &r.RecurUntil, &r.RecurParentID,
 			&r.BoardID, &r.BoardName, &r.ColumnName); err != nil {
 			return nil, err
 		}

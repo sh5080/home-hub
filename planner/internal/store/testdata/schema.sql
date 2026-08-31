@@ -84,7 +84,7 @@ CREATE TABLE cards (
   created_by  INTEGER NOT NULL REFERENCES users(id),
   created_at  INTEGER NOT NULL,
   updated_at  INTEGER NOT NULL
-, content TEXT, priority INTEGER NOT NULL DEFAULT 0, end_at TEXT);
+, content TEXT, priority INTEGER NOT NULL DEFAULT 0, end_at TEXT, recur           TEXT, recur_until     TEXT, recur_parent_id INTEGER REFERENCES cards(id) ON DELETE SET NULL);
 
 CREATE TABLE columns (
   id       INTEGER PRIMARY KEY,
@@ -146,6 +146,8 @@ CREATE INDEX cards_due ON cards(due_at) WHERE due_at IS NOT NULL;
 CREATE INDEX cards_end ON cards(end_at) WHERE end_at IS NOT NULL;
 
 CREATE INDEX cards_priority ON cards(priority);
+
+CREATE INDEX cards_recur ON cards(recur) WHERE recur IS NOT NULL;
 
 CREATE INDEX columns_board ON columns(board_id, position);
 

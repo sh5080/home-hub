@@ -78,6 +78,13 @@ export interface Card {
   due_at: string | null
   /** 여러 날에 걸치는 항목의 끝. 없으면 하루짜리. */
   end_at: string | null
+  /** 반복 규칙. daily | every:N | weekly:마스크 | monthly:일 | yearly:MM-DD */
+  recur: string | null
+  recur_until: string | null
+  /** 이 카드를 낳은 앞 회차 */
+  recur_parent_id: number | null
+  /** 규칙을 사람이 읽는 말로. 해석은 서버가 한다. */
+  recur_label: string
   /** 0=없음, 1~3 */
   priority: number
   assignee_id: number | null
