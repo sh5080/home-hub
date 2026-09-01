@@ -197,3 +197,47 @@ func TestDeleteColumnCompacts(t *testing.T) {
 		t.Fatalf("columns not compacted: %+v", d.Columns)
 	}
 }
+
+// 홈의 '오늘 할 일'은 이름 그대로여야 한다. 칸 전체를 주면 다음 달 마감까지
+// 섞여 들어와 5줄 제한에 오늘 것이 밀려나고, 바로 아래 '앞으로 7일'에만
+// 보이는 모순이 생긴다.
+func TestTodoCardsStopsAtToday(t *testing.T) {
+	st, by, cols := openTest(t)
+	ctx := context.Background()
+
+	mk := func(title, due string) {
+		var d *string
+		if due != "" {
+			d = &due
+		}
+		if _, err := st.CreateCard(ctx, cols[0], CardInput{Title: &title, DueAt: d}, by); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mk("밀린 것", "2026-09-23")
+	mk("오늘 것", "2026-09-24")
+	mk("오늘 오후", "2026-09-24T13:00")
+	mk("내일 것", "2026-09-25")
+	mk("내일 아침", "2026-09-25T09:00")
+	mk("다음 달", "2026-10-20")
+	mk("마감 없음", "")
+
+	got, err := st.TodoCards(ctx, "2026-09-24", SortTime, Asc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	have := map[string]bool{}
+	for _, c := range got {
+		have[c.Title] = true
+	}
+	for _, want := range []string{"밀린 것", "오늘 것", "오늘 오후", "마감 없음"} {
+		if !have[want] {
+			t.Fatalf("%q 가 빠졌다: %v", want, have)
+		}
+	}
+	for _, no := range []string{"내일 것", "내일 아침", "다음 달"} {
+		if have[no] {
+			t.Fatalf("%q 는 오늘 할 일이 아니다", no)
+		}
+	}
+}

@@ -533,7 +533,24 @@ type TodoCard struct {
 // board — the kanban convention for "to do" — ordered by due date first, then
 // board, then position. The last column (max position) is reported as the
 // completion target.
-func (s *Store) TodoCards(ctx context.Context, sortBy Sort, order Order) ([]TodoCard, error) {
+// TodoCards는 첫 칸('할 일')에서 **오늘까지 해야 할 것**을 돌려준다.
+//
+// 칸 전체를 주면 다음 달 마감까지 섞여 들어온다. 홈은 5줄만 보여주므로 그
+// 목록이 길수록 정작 오늘 것이 잘려 나가고, 바로 아래 '앞으로 7일'에는 보이는
+// 모순이 생긴다. 경계를 나눈다 — 위는 오늘까지, 아래는 내일부터.
+//
+// 마감 없는 카드는 포함한다. 언제 할지 안 정했을 뿐 할 일인 건 맞다.
+func (s *Store) TodoCards(ctx context.Context, date string, sortBy Sort, order Order) ([]TodoCard, error) {
+	if !validDue(date) {
+		return nil, invalid("날짜는 YYYY-MM-DD 형식이어야 해요")
+	}
+	d, err := time.Parse("2006-01-02", date[:10])
+	if err != nil {
+		return nil, invalid("날짜는 YYYY-MM-DD 형식이어야 해요")
+	}
+	// 사전식 비교라 '2026-09-24T13:00' < '2026-09-25' 는 참이고
+	// '2026-09-25T09:00' < '2026-09-25' 는 거짓이다. 시각이 붙어도 경계가 맞는다.
+	tomorrow := d.AddDate(0, 0, 1).Format("2006-01-02")
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT c.id, c.column_id, c.title, c.description, c.content, c.position, c.due_at, c.end_at, c.priority, c.assignee_id, c.created_by, c.created_at, c.updated_at, c.recur, c.recur_until, c.recur_parent_id,
 		       b.id, b.name,
@@ -541,8 +558,8 @@ func (s *Store) TodoCards(ctx context.Context, sortBy Sort, order Order) ([]Todo
 		FROM cards c
 		JOIN columns col ON col.id = c.column_id
 		JOIN boards b ON b.id = col.board_id
-		WHERE col.position = 0
-		ORDER BY `+orderBy(sortBy, order, "c.")+`, b.id`)
+		WHERE col.position = 0 AND (c.due_at IS NULL OR c.due_at < ?)
+		ORDER BY `+orderBy(sortBy, order, "c.")+`, b.id`, tomorrow)
 	if err != nil {
 		return nil, err
 	}
@@ -551,9 +568,11 @@ func (s *Store) TodoCards(ctx context.Context, sortBy Sort, order Order) ([]Todo
 	for rows.Next() {
 		var t TodoCard
 		if err := rows.Scan(&t.ID, &t.ColumnID, &t.Title, &t.Description, &t.Content, &t.Position, &t.DueAt, &t.EndAt, &t.Priority, &t.AssigneeID, &t.CreatedBy, &t.CreatedAt, &t.UpdatedAt,
+			&t.Recur, &t.RecurUntil, &t.RecurParentID,
 			&t.BoardID, &t.BoardName, &t.DoneColumnID); err != nil {
 			return nil, err
 		}
+		fillRecurLabel(&t.Card)
 		out = append(out, t)
 	}
 	return out, rows.Err()

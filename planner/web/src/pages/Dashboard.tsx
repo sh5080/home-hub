@@ -22,7 +22,9 @@ export default function Dashboard() {
   // 방향 토글은 두지 않는다. 홈은 "오늘 뭘 할까"를 훑는 화면이라 가까운
   // 마감·높은 중요도가 위에 오는 게 늘 맞다. 역순은 보드에서 쓴다.
   const day = useToday(todayStr, sort)
-  const week = useCalendar(todayStr, addDays(todayStr, 7))
+  // 내일부터다. 오늘까지는 위의 '오늘 할 일'이 맡는다 — 겹치면 같은 카드가
+  // 한 화면에 두 번 나오고, 위에서 잘린 것이 아래에만 보이는 모순이 생긴다.
+  const week = useCalendar(addDays(todayStr, 1), addDays(todayStr, 8))
   // 이유식은 별도 탭이지만 '오늘 뭘 먹이나'는 홈에서 바로 보여야 한다.
   const bf = useBabyfood(todayStr, todayStr)
   // 이유식 탭이 생일 입력을 요구할 때 ?settings=1 로 보낸다.
@@ -148,7 +150,7 @@ export default function Dashboard() {
             <h2 className="text-base font-bold">앞으로 7일</h2>
             <Link to="/calendar" className="text-xs text-slate-400">캘린더 ›</Link>
           </div>
-          {week.isPending ? <SkeletonList rows={2} /> : <WeekStrip data={week.data} from={todayStr} />}
+          {week.isPending ? <SkeletonList rows={2} /> : <WeekStrip data={week.data} from={addDays(todayStr, 1)} />}
         </section>
       </div>
 
@@ -225,6 +227,8 @@ function TodayMeals({ data }: { data?: BFRangeData }) {
 }
 
 function WeekStrip({ data, from }: { data?: CalendarData; from: string }) {
+  // 라벨은 진짜 오늘 기준이다 — from 은 내일부터 시작한다.
+  const t = today()
   const days = Array.from({ length: 7 }, (_, i) => addDays(from, i))
   // 캘린더는 날짜가 있는 카드를 본 것이다 — 일정과 할 일이 한 목록이다.
   const items = days.map((d) => ({
@@ -243,7 +247,7 @@ function WeekStrip({ data, from }: { data?: CalendarData; from: string }) {
           {/* 날짜 칸을 누르면 캘린더의 그 날로 간다 */}
           <Link to={`/calendar?date=${d}`} className="block rounded-xl bg-white p-3 shadow-sm active:bg-slate-50">
           <p className="mb-1 flex items-center gap-1 text-xs font-semibold text-slate-500">
-            {d === from ? '오늘' : d === addDays(from, 1) ? '내일' : `${WEEKDAYS[weekdayIndex(d)]} ${Number(d.slice(8))}일`}
+            {d === addDays(t, 1) ? '내일' : `${WEEKDAYS[weekdayIndex(d)]} ${Number(d.slice(8))}일`}
             <svg viewBox="0 0 24 24" className="h-3 w-3 text-slate-300" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M9 6l6 6-6 6" /></svg>
           </p>
           {cards.map((c) => (

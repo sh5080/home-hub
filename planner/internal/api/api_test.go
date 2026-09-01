@@ -649,3 +649,38 @@ func TestSearch(t *testing.T) {
 		t.Fatalf("빈 질의에 %d건", len(got))
 	}
 }
+
+// 홈의 '오늘 할 일'. 카드에 컬럼을 더할 때 이 경로의 Scan을 빠뜨리기 쉬운데,
+// 아무도 안 부르면 배포 후에야 500으로 드러난다.
+func TestTodayEndpoint(t *testing.T) {
+	c := newClient(t)
+	c.must("POST", "/api/login", map[string]string{"name": "테스트1", "password": "pass1234"}, nil, 200)
+
+	var d store.BoardDetail
+	c.must("GET", "/api/boards/1", nil, &d, 200)
+	col := d.Columns[0].ID
+	c.must("POST", "/api/columns/"+itoa(col)+"/cards",
+		map[string]any{"title": "오늘 것", "due_at": "2026-09-24"}, nil, 201)
+	c.must("POST", "/api/columns/"+itoa(col)+"/cards",
+		map[string]any{"title": "내일 것", "due_at": "2026-09-25"}, nil, 201)
+
+	var got struct {
+		Routines []store.Routine  `json:"routines"`
+		Cards    []store.TodoCard `json:"cards"`
+	}
+	c.must("GET", "/api/today?date=2026-09-24", nil, &got, 200)
+	titles := map[string]bool{}
+	for _, x := range got.Cards {
+		titles[x.Title] = true
+	}
+	if !titles["오늘 것"] {
+		t.Fatalf("오늘 것이 없다: %+v", got.Cards)
+	}
+	// 내일 것은 '앞으로 7일'이 맡는다. 둘 다에 나오면 같은 카드가 한 화면에
+	// 두 번 보이고, 위에서 잘린 것이 아래에만 보이는 모순이 생긴다.
+	if titles["내일 것"] {
+		t.Fatal("내일 것이 오늘 할 일에 들어왔다")
+	}
+	c.must("GET", "/api/today", nil, nil, 400)
+	c.must("GET", "/api/today?date=어제", nil, nil, 400)
+}
