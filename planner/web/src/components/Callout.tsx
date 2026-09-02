@@ -1,9 +1,8 @@
 import { createReactBlockSpec } from '@blocknote/react'
 
-// 노션의 콜아웃. BlockNote 기본 블록엔 없어서 직접 만든다.
-// props로 이모지와 색을 들고, 본문은 일반 inline content다.
+// 콜아웃 블록(BlockNote 기본엔 없다).
 const TONES = {
-  gray: 'bg-slate-100 border-slate-200',
+  gray: 'bg-surface-2 border-line',
   blue: 'bg-sky-50 border-sky-200',
   green: 'bg-emerald-50 border-emerald-200',
   yellow: 'bg-amber-50 border-amber-200',
