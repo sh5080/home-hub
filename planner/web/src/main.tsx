@@ -4,10 +4,14 @@ import { BrowserRouter } from 'react-router'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import App from './App'
 import './index.css'
+import { startTheme } from './lib/theme'
+import { registerSW } from './lib/push'
 
-// 주 경로는 SSE(useLiveSync)다. 아래 둘은 안전망:
-//   - 창 포커스: iOS Safari가 백그라운드에서 EventSource를 끊으므로 돌아올 때 필요
-//   - 주기 폴링: 스트림이 조용히 죽은 경우를 대비. SSE가 있으니 길게 잡는다
+// 첫 렌더 전에 적용한다(나중에 켜면 한 번 번쩍인다).
+startTheme()
+registerSW()
+
+// 주 경로는 SSE. 포커스 재조회는 iOS 가 백그라운드에서 스트림을 끊어서, 폴링은 스트림이 조용히 죽을 때 대비.
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {

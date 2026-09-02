@@ -1,16 +1,81 @@
 @import "tailwindcss";
 
+/* 다크 모드는 <html class="dark">. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* 색은 의미 토큰으로 쓴다. 값은 아래 .dark 에서 갈아끼운다. */
 @theme {
   --font-sans: "Pretendard Variable", Pretendard, -apple-system, BlinkMacSystemFont, system-ui, "Apple SD Gothic Neo", "Noto Sans KR", sans-serif;
+
+  --color-canvas: var(--c-canvas);       /* 페이지 바탕 */
+  --color-surface: var(--c-surface);     /* 카드·바 */
+  --color-surface-2: var(--c-surface-2); /* 칩·은은한 채움 */
+  --color-line: var(--c-line);           /* 테두리·구분선·트랙 */
+  --color-ink: var(--c-ink);             /* 본문 글자 */
+  --color-ink-2: var(--c-ink-2);         /* 약간 약한 글자 */
+  --color-muted: var(--c-muted);         /* 보조 글자 */
+  --color-faint: var(--c-faint);         /* 더 약한 글자 */
+  --color-ghost: var(--c-ghost);         /* 아이콘 꺾쇠 등 */
+  --color-accent: var(--c-accent);       /* 강조 버튼 바탕 */
+  --color-accent-ink: var(--c-accent-ink);
+}
+
+:root {
+  --c-canvas: oklch(0.984 0.003 247.858);   /* slate-50 */
+  --c-surface: #fff;
+  --c-surface-2: oklch(0.968 0.007 247.896); /* slate-100 */
+  --c-line: oklch(0.929 0.013 255.508);      /* slate-200 */
+  --c-ink: oklch(0.208 0.042 265.755);       /* slate-900 */
+  --c-ink-2: oklch(0.372 0.044 257.287);     /* slate-700 */
+  --c-muted: oklch(0.554 0.046 257.417);     /* slate-500 */
+  --c-faint: oklch(0.704 0.04 256.788);      /* slate-400 */
+  --c-ghost: oklch(0.869 0.022 252.894);     /* slate-300 */
+  --c-accent: oklch(0.208 0.042 265.755);    /* slate-900 */
+  --c-accent-ink: #fff;
+}
+
+.dark {
+  --c-canvas: oklch(0.129 0.042 264.695);    /* slate-950 */
+  --c-surface: oklch(0.208 0.042 265.755);   /* slate-900 */
+  --c-surface-2: oklch(0.279 0.041 260.031); /* slate-800 */
+  --c-line: oklch(0.279 0.041 260.031);      /* slate-800 */
+  --c-ink: oklch(0.968 0.007 247.896);       /* slate-100 */
+  --c-ink-2: oklch(0.869 0.022 252.894);     /* slate-300 */
+  --c-muted: oklch(0.704 0.04 256.788);      /* slate-400 */
+  --c-faint: oklch(0.554 0.046 257.417);     /* slate-500 */
+  --c-ghost: oklch(0.446 0.043 257.281);     /* slate-600 */
+  --c-accent: oklch(0.968 0.007 247.896);    /* slate-100 */
+  --c-accent-ink: oklch(0.208 0.042 265.755);
 }
 
 html, body, #root {
   height: 100%;
 }
 
+/* 스크롤은 <main> 만 한다. 문서·main 의 iOS 바운스를 끈다 —
+   문서가 늘어나면 하단 탭이, main 이 늘어나면 sticky 헤더가 끌려간다. */
+html, body {
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+main {
+  overscroll-behavior-y: none;
+}
+
+/* html 바탕은 탭바 색. 칠할 수 없는 홈 인디케이터 띠와 튕김 영역이 탭바와 같은 색이 된다
+   (html 에 색을 주면 body 색이 캔버스로 번지지 않는다). */
+html {
+  background: var(--c-surface);
+}
+
+:root { color-scheme: light; }
+.dark { color-scheme: dark; }
+
+/* iOS standalone 실측: 화면 812 / 보이는 높이 762 / 위 50 / 아래 34.
+   위 50px 은 뷰포트 밖(시스템이 body 색으로 칠함), 아래 34px 은 안쪽이라 직접 덮는다. */
 body {
-  @apply bg-slate-50 text-slate-900 antialiased;
-  /* iOS 홈화면 앱: 노치/홈 인디케이터 영역 */
+  @apply bg-canvas text-ink antialiased;
+  /* 노치 아래로 내린다. 없으면 헤더가 베젤에 가려진다. */
   padding-top: env(safe-area-inset-top);
 }
 
@@ -24,12 +89,72 @@ input[type="datetime-local"] {
   appearance: none;
 }
 
-/* 스크롤바를 숨긴다. 어디까지 더 있는지는 가장자리 페이드(useScrollFade)가
-   알려주므로 막대가 없어도 길을 잃지 않는다. */
+/* 스크롤바를 숨긴다(가장자리 페이드가 대신 알린다). */
 .no-scrollbar {
   scrollbar-width: none;          /* Firefox */
   -ms-overflow-style: none;       /* 구형 Edge */
 }
 .no-scrollbar::-webkit-scrollbar {
   display: none;                  /* Safari, Chrome */
+}
+
+/* 강조 색의 옅은 바탕(-50/-100)은 다크에서 투명도로 깐다(선택자가 한 단계 깊어 유틸리티를 덮는다). */
+.dark .bg-amber-50,
+.dark .bg-amber-100 { background-color: rgb(245 158 11 / 0.16); }
+.dark .bg-emerald-50 { background-color: rgb(16 185 129 / 0.16); }
+.dark .ring-emerald-200 { --tw-ring-color: rgb(16 185 129 / 0.35); }
+.dark .bg-rose-50,
+.dark .bg-rose-100 { background-color: rgb(244 63 94 / 0.16); }
+.dark .bg-sky-50,
+.dark .bg-sky-100 { background-color: rgb(14 165 233 / 0.16); }
+
+.dark .text-amber-700,
+.dark .text-amber-800,
+.dark .text-amber-900 { color: rgb(252 211 77); }   /* amber-300 */
+.dark .text-emerald-600,
+.dark .text-emerald-700 { color: rgb(110 231 183); } /* emerald-300 */
+.dark .text-rose-500,
+.dark .text-rose-600,
+.dark .text-rose-700 { color: rgb(253 164 175); }    /* rose-300 */
+.dark .text-sky-600,
+.dark .text-sky-700 { color: rgb(125 211 252); }     /* sky-300 */
+
+.dark .border-amber-200 { border-color: rgb(245 158 11 / 0.35); }
+.dark .border-emerald-200 { border-color: rgb(16 185 129 / 0.35); }
+.dark .border-rose-200 { border-color: rgb(244 63 94 / 0.35); }
+.dark .border-sky-200 { border-color: rgb(14 165 233 / 0.35); }
+
+/* 투명도가 섞인 변형(예: text-amber-700/70)도 같이 처리한다. */
+.dark [class*="text-amber-7"],
+.dark [class*="text-amber-8"],
+.dark [class*="text-amber-9"] { color: rgb(252 211 77); }
+
+.dark .text-indigo-500 { color: rgb(165 180 252); }
+.dark .text-teal-500 { color: rgb(94 234 212); }
+.dark .text-stone-500 { color: rgb(214 211 209); }
+
+/* Tailwind v4 는 버튼 커서를 기본 화살표로 둔다. PC 에서 누를 수 있는 걸 알아보게 손가락 커서와 호버를 준다.
+   base 레이어라 cursor-* 유틸리티가 이긴다. */
+@layer base {
+  button:not(:disabled), [role="button"], summary, select, a[href],
+  input[type="checkbox"], input[type="radio"], input[type="file"], label:has(> input[type="checkbox"]) {
+    cursor: pointer;
+  }
+  button:disabled { cursor: not-allowed; }
+  @media (hover: hover) {
+    button:not(:disabled):hover, [role="button"]:hover, summary:hover { filter: brightness(0.94); }
+    .dark button:not(:disabled):hover, .dark [role="button"]:hover, .dark summary:hover { filter: brightness(1.25); }
+  }
+}
+
+/* 드롭다운: 브라우저 기본 화살표는 오른쪽 끝에 붙어 여백이 없다(iOS·Mac 모두). 직접 그린다.
+   레이어 밖에 둬서 px-* 유틸리티보다 오른쪽 여백이 이긴다. */
+select {
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.5rem center;
+  background-size: 0.875rem;
+  padding-right: 1.75rem;
 }
