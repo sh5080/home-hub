@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// Routine is a weekly recurring item. WeekdaysMask uses ISO bits: bit0=Mon … bit6=Sun.
+// Routine 은 주간 반복 항목. WeekdaysMask 는 bit0=월 … bit6=일.
 type Routine struct {
 	ID           int64   `json:"id"`
 	Title        string  `json:"title"`
@@ -17,7 +17,9 @@ type Routine struct {
 	AssigneeID   *int64  `json:"assignee_id"`
 	Active       bool    `json:"active"`
 	Position     int     `json:"position"`
-	CreatedAt    int64   `json:"created_at"`
+	// CreatedBy 는 0010 이전 루틴은 NULL.
+	CreatedBy *int64 `json:"created_by"`
+	CreatedAt int64  `json:"created_at"`
 
 	// Populated only by RoutinesForDate.
 	CheckedBy *int64 `json:"checked_by"`
@@ -41,7 +43,7 @@ func validTimeOfDay(s string) bool {
 }
 
 // CreateRoutine appends a routine.
-func (s *Store) CreateRoutine(ctx context.Context, in RoutineInput) (Routine, error) {
+func (s *Store) CreateRoutine(ctx context.Context, in RoutineInput, by int64) (Routine, error) {
 	title := ""
 	if in.Title != nil {
 		title = strings.TrimSpace(*in.Title)
@@ -80,8 +82,8 @@ func (s *Store) CreateRoutine(ctx context.Context, in RoutineInput) (Routine, er
 	}
 	now := time.Now().Unix()
 	res, err := tx.ExecContext(ctx, `
-		INSERT INTO routines (title, weekdays_mask, time_of_day, assignee_id, active, position, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)`, title, mask, tod, assignee, active, pos, now)
+		INSERT INTO routines (title, weekdays_mask, time_of_day, assignee_id, active, position, created_by, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, title, mask, tod, assignee, active, pos, by, now)
 	if err != nil {
 		return Routine{}, err
 	}
@@ -89,7 +91,7 @@ func (s *Store) CreateRoutine(ctx context.Context, in RoutineInput) (Routine, er
 	if err := tx.Commit(); err != nil {
 		return Routine{}, err
 	}
-	return Routine{ID: id, Title: title, WeekdaysMask: mask, TimeOfDay: tod, AssigneeID: assignee, Active: active, Position: pos, CreatedAt: now}, nil
+	return Routine{ID: id, Title: title, WeekdaysMask: mask, TimeOfDay: tod, AssigneeID: assignee, Active: active, Position: pos, CreatedBy: &by, CreatedAt: now}, nil
 }
 
 // UpdateRoutine patches the named fields.
@@ -151,8 +153,8 @@ func (s *Store) UpdateRoutine(ctx context.Context, id int64, in RoutineInput) (R
 func (s *Store) GetRoutine(ctx context.Context, id int64) (Routine, error) {
 	var r Routine
 	err := s.db.QueryRowContext(ctx, `
-		SELECT id, title, weekdays_mask, time_of_day, assignee_id, active, position, created_at FROM routines WHERE id=?`, id).
-		Scan(&r.ID, &r.Title, &r.WeekdaysMask, &r.TimeOfDay, &r.AssigneeID, &r.Active, &r.Position, &r.CreatedAt)
+		SELECT id, title, weekdays_mask, time_of_day, assignee_id, active, position, created_by, created_at FROM routines WHERE id=?`, id).
+		Scan(&r.ID, &r.Title, &r.WeekdaysMask, &r.TimeOfDay, &r.AssigneeID, &r.Active, &r.Position, &r.CreatedBy, &r.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Routine{}, ErrNotFound
 	}
@@ -186,7 +188,7 @@ func (s *Store) DeleteRoutine(ctx context.Context, id int64) error {
 // ListRoutines returns every routine (active or not) in order, without check state.
 func (s *Store) ListRoutines(ctx context.Context) ([]Routine, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, title, weekdays_mask, time_of_day, assignee_id, active, position, created_at
+		SELECT id, title, weekdays_mask, time_of_day, assignee_id, active, position, created_by, created_at
 		FROM routines ORDER BY position, id`)
 	if err != nil {
 		return nil, err
@@ -195,7 +197,7 @@ func (s *Store) ListRoutines(ctx context.Context) ([]Routine, error) {
 	out := []Routine{}
 	for rows.Next() {
 		var r Routine
-		if err := rows.Scan(&r.ID, &r.Title, &r.WeekdaysMask, &r.TimeOfDay, &r.AssigneeID, &r.Active, &r.Position, &r.CreatedAt); err != nil {
+		if err := rows.Scan(&r.ID, &r.Title, &r.WeekdaysMask, &r.TimeOfDay, &r.AssigneeID, &r.Active, &r.Position, &r.CreatedBy, &r.CreatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, r)
@@ -213,7 +215,7 @@ func (s *Store) RoutinesForDate(ctx context.Context, date string) ([]Routine, er
 	bit := 1 << ((int(d.Weekday()) + 6) % 7) // Go: Sun=0 → ISO: Mon=0
 
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT r.id, r.title, r.weekdays_mask, r.time_of_day, r.assignee_id, r.active, r.position, r.created_at,
+		SELECT r.id, r.title, r.weekdays_mask, r.time_of_day, r.assignee_id, r.active, r.position, r.created_by, r.created_at,
 		       c.checked_by, c.checked_at
 		FROM routines r
 		LEFT JOIN routine_checks c ON c.routine_id = r.id AND c.date = ?
@@ -226,7 +228,7 @@ func (s *Store) RoutinesForDate(ctx context.Context, date string) ([]Routine, er
 	out := []Routine{}
 	for rows.Next() {
 		var r Routine
-		if err := rows.Scan(&r.ID, &r.Title, &r.WeekdaysMask, &r.TimeOfDay, &r.AssigneeID, &r.Active, &r.Position, &r.CreatedAt,
+		if err := rows.Scan(&r.ID, &r.Title, &r.WeekdaysMask, &r.TimeOfDay, &r.AssigneeID, &r.Active, &r.Position, &r.CreatedBy, &r.CreatedAt,
 			&r.CheckedBy, &r.CheckedAt); err != nil {
 			return nil, err
 		}
@@ -235,8 +237,7 @@ func (s *Store) RoutinesForDate(ctx context.Context, date string) ([]Routine, er
 	return out, rows.Err()
 }
 
-// RoutineChecksInRange returns (routine_id, date) pairs checked in [from, to)
-// — for the weekly grid, one query instead of seven.
+// RoutineChecksInRange 는 [from, to) 의 (routine_id, date) 체크들.
 func (s *Store) RoutineChecksInRange(ctx context.Context, from, to string) (map[int64][]string, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT routine_id, date FROM routine_checks WHERE date >= ? AND date < ?`, from, to)
 	if err != nil {

@@ -18,9 +18,7 @@ func (s *Server) registerRoutines(m *http.ServeMux) {
 	m.HandleFunc("GET /api/today", s.today)
 }
 
-// GET /api/today?date=D → {routines, cards}: the home screen's unified list.
-// Routines are those scheduled on D with D's check state; cards are every
-// board's first-column ("할 일") cards.
+// GET /api/today?date=D → {routines, cards}: D 의 루틴(체크 상태 포함)과 모든 보드의 첫 칸 카드.
 func (s *Server) today(w http.ResponseWriter, r *http.Request) {
 	date := r.URL.Query().Get("date")
 	if date == "" {
@@ -89,7 +87,8 @@ func (s *Server) createRoutine(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &req) {
 		return
 	}
-	rt, err := s.st.CreateRoutine(r.Context(), req.input())
+	u, _ := auth.UserFrom(r.Context())
+	rt, err := s.st.CreateRoutine(r.Context(), req.input(), u.ID)
 	if s.storeErr(w, err, "create routine") {
 		return
 	}

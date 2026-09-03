@@ -9,10 +9,7 @@ import (
 
 func nowFixed() time.Time { return time.Unix(1_800_000_000, 0) }
 
-// 모든 SQL은 ? 플레이스홀더로 값을 바인딩한다. 동적으로 조립하는 유일한 곳
-// (UpdateCard/UpdateRoutine의 SET 절)도 조각이 전부 하드코딩 리터럴이고
-// 값은 args로 나간다. 이 테스트는 그 불변식을 고정한다 — 누군가 나중에
-// fmt.Sprintf로 SQL을 만들면 여기서 깨져야 한다.
+// 모든 SQL 값은 ? 로 바인딩한다. 동적 SET 절도 조각은 상수뿐 — 누가 Sprintf 로 SQL 을 만들면 여기서 깨져야 한다.
 var payloads = []string{
 	`'; DROP TABLE users;--`,
 	`" OR "1"="1`,
@@ -75,7 +72,7 @@ func TestInjectionPayloadsAreStoredAsData(t *testing.T) {
 
 		// 루틴 제목 (다른 동적 SET 절)
 		mask := 127
-		rt, err := st.CreateRoutine(ctx, RoutineInput{Title: &p, WeekdaysMask: &mask})
+		rt, err := st.CreateRoutine(ctx, RoutineInput{Title: &p, WeekdaysMask: &mask}, u.ID)
 		if err != nil {
 			t.Fatalf("CreateRoutine(%q): %v", p, err)
 		}
@@ -100,8 +97,7 @@ func TestInjectionPayloadsAreStoredAsData(t *testing.T) {
 		}
 	}
 
-	// 테이블이 전부 살아 있고 행 수가 기대대로인지 — DROP/DELETE가 실행됐다면
-	// 여기서 무너진다.
+	// 테이블이 전부 살아 있는지(DROP/DELETE 가 실행됐다면 무너진다).
 	for _, tbl := range []string{"users", "boards", "columns", "cards", "routines", "sessions", "login_attempts", "schema_migrations"} {
 		var n int
 		if err := st.db.QueryRow(`SELECT count(*) FROM ` + tbl).Scan(&n); err != nil {
