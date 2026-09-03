@@ -10,8 +10,7 @@ import (
 	"github.com/sh5080/home-hub/planner/internal/auth"
 )
 
-// MinPasswordLen은 공개(tailscale funnel) 노출을 전제로 한 최소 길이다.
-// 4자는 랜 전용일 때의 값이었고, 인터넷에서 닿는 순간 너무 약하다.
+// MinPasswordLen 은 funnel(공개) 노출 기준의 최소 길이.
 const MinPasswordLen = 8
 
 // ErrNotFound is returned when a row doesn't exist.
@@ -20,8 +19,7 @@ var ErrNotFound = errors.New("not found")
 // ErrConflict is returned on a unique-constraint violation (e.g. duplicate name).
 var ErrConflict = errors.New("already exists")
 
-// dummyHash is a real bcrypt hash compared against when the user doesn't
-// exist, so the "no such user" path costs as much as a wrong password.
+// dummyHash: 없는 사용자도 비밀번호 비교만큼 시간을 쓰게 한다(이름 추측 방지).
 var dummyHash = func() string {
 	h, _ := auth.HashPassword("planner-dummy")
 	return h
@@ -29,9 +27,11 @@ var dummyHash = func() string {
 
 // User is a family member.
 type User struct {
-	ID        int64  `json:"id"`
-	Name      string `json:"name"`
-	CreatedAt int64  `json:"created_at"`
+	ID   int64  `json:"id"`
+	Name string `json:"name"`
+	// BirthDate 는 'YYYY-MM-DD'. 어른도 포함. 아이는 이유식 D+n 기준.
+	BirthDate *string `json:"birth_date"`
+	CreatedAt int64   `json:"created_at"`
 }
 
 // CreateUser inserts a user with a bcrypt-hashed password.
@@ -79,9 +79,7 @@ func (s *Store) SetPassword(ctx context.Context, name, password string) error {
 	return nil
 }
 
-// DeleteUser removes a user. Assignments are nulled by the schema; content the
-// user *created* keeps a NOT NULL created_by, so deleting such a user fails
-// with a clear error rather than orphaning rows.
+// DeleteUser 는 사용자를 지운다. created_by 가 NOT NULL 인 행이 있으면 실패한다.
 func (s *Store) DeleteUser(ctx context.Context, name string) error {
 	res, err := s.db.ExecContext(ctx, `DELETE FROM users WHERE name=?`, name)
 	if err != nil {
@@ -98,7 +96,7 @@ func (s *Store) DeleteUser(ctx context.Context, name string) error {
 
 // ListUsers returns everyone, oldest first.
 func (s *Store) ListUsers(ctx context.Context) ([]User, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, name, created_at FROM users ORDER BY id`)
+	rows, err := s.db.QueryContext(ctx, `SELECT id, name, birth_date, created_at FROM users ORDER BY birth_date IS NULL, birth_date, id`)
 	if err != nil {
 		return nil, err
 	}
@@ -106,7 +104,7 @@ func (s *Store) ListUsers(ctx context.Context) ([]User, error) {
 	var out []User
 	for rows.Next() {
 		var u User
-		if err := rows.Scan(&u.ID, &u.Name, &u.CreatedAt); err != nil {
+		if err := rows.Scan(&u.ID, &u.Name, &u.BirthDate, &u.CreatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, u)
@@ -117,8 +115,7 @@ func (s *Store) ListUsers(ctx context.Context) ([]User, error) {
 	return out, rows.Err()
 }
 
-// UserExists reports whether name is a real account. Used to tell a family
-// member's typo apart from a scanner probing made-up names.
+// UserExists 는 가족의 오타와 이름을 지어내는 스캐너를 구분하는 데 쓴다.
 func (s *Store) UserExists(ctx context.Context, name string) bool {
 	var n int
 	if err := s.db.QueryRowContext(ctx,
@@ -128,8 +125,7 @@ func (s *Store) UserExists(ctx context.Context, name string) bool {
 	return n > 0
 }
 
-// SetPasswordByID replaces the hash for a user id and invalidates every
-// session they had — a reset must revoke whoever held the old credential.
+// SetPasswordByID 는 비밀번호를 바꾸고 모든 세션을 끊는다.
 func (s *Store) SetPasswordByID(ctx context.Context, id int64, password string) (User, error) {
 	if len(password) < MinPasswordLen {
 		return User{}, invalid("비밀번호는 8자 이상이어야 해요")
@@ -159,8 +155,7 @@ func (s *Store) SetPasswordByID(ctx context.Context, id int64, password string) 
 	if _, err := tx.ExecContext(ctx, `DELETE FROM sessions WHERE user_id=?`, id); err != nil {
 		return User{}, err
 	}
-	// 재설정은 잠금 해제이기도 하다 — 가족이 잊어서 잠긴 상태를 그대로 두면
-	// 비밀번호를 바꾸고도 못 들어간다.
+	// 재설정은 로그인 잠금도 푼다.
 	if _, err := tx.ExecContext(ctx, `DELETE FROM login_attempts WHERE key=?`, "user:"+u.Name); err != nil {
 		return User{}, err
 	}
@@ -179,8 +174,6 @@ func (s *Store) Authenticate(ctx context.Context, name, password string) (User, 
 		`SELECT id, name, password_hash, created_at FROM users WHERE name=?`, strings.TrimSpace(name)).
 		Scan(&u.ID, &u.Name, &hash, &u.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
-		// Burn roughly the same time as a real compare so name enumeration
-		// by timing isn't trivial.
 		auth.CheckPassword(dummyHash, password)
 		return User{}, false, nil
 	}
@@ -240,8 +233,31 @@ func (s *Store) PurgeExpiredSessions(ctx context.Context, now time.Time) (int64,
 	return res.RowsAffected()
 }
 
-// isUnique reports whether err is a SQLite UNIQUE violation.
-// modernc surfaces it as a string; matching the text is the portable check.
+// isUnique 는 SQLite UNIQUE 위반인지 본다(modernc 는 문자열로만 준다).
 func isUnique(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "UNIQUE constraint failed")
+}
+
+// SetBirthDate 는 생년월일을 넣거나 지운다(""). 이유식 D+n 기준이라 형식을 여기서 막는다.
+func (s *Store) SetBirthDate(ctx context.Context, id int64, date string) (User, error) {
+	date = strings.TrimSpace(date)
+	var v *string
+	if date != "" {
+		if _, err := time.Parse("2006-01-02", date); err != nil {
+			return User{}, invalid("생년월일은 YYYY-MM-DD 형식이어야 해요")
+		}
+		v = &date
+	}
+	res, err := s.db.ExecContext(ctx, `UPDATE users SET birth_date=? WHERE id=?`, v, id)
+	if err != nil {
+		return User{}, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return User{}, ErrNotFound
+	}
+	var u User
+	err = s.db.QueryRowContext(ctx,
+		`SELECT id, name, birth_date, created_at FROM users WHERE id=?`, id).
+		Scan(&u.ID, &u.Name, &u.BirthDate, &u.CreatedAt)
+	return u, err
 }
