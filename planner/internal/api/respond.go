@@ -5,6 +5,7 @@ import (
 	"errors"
 	"mime"
 	"net/http"
+	"strconv"
 )
 
 const maxBody = 1 << 20 // 1 MiB — nothing here is that big
@@ -19,9 +20,8 @@ func writeErr(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]string{"error": msg})
 }
 
-// decodeJSON reads a JSON body into v. Requiring Content-Type: application/json
-// on every mutating route is the CSRF backstop alongside SameSite=Lax — a
-// cross-site HTML form cannot send that content type.
+// decodeJSON 은 Content-Type: application/json 을 요구한다 — SameSite=Lax 와 함께 CSRF 방어
+// (교차 사이트 폼은 이 타입을 못 보낸다).
 func decodeJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 	ct, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type"))
 	if ct != "application/json" {
@@ -41,4 +41,12 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 		return false
 	}
 	return true
+}
+
+func atoiDefault(s string, def int) int {
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		return def
+	}
+	return n
 }

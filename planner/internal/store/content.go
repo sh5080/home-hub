@@ -5,13 +5,9 @@ import (
 	"strings"
 )
 
-// 블록 문서는 편집기가 내는 JSON 배열이다. 우리는 최소한만 안다: 각 블록에
-// type이 있고, 텍스트는 inline content 배열의 text 필드에 들어간다. 나머지
-// (props, children)는 그대로 보관한다 — 편집기가 진화해도 서버를 안 고친다.
+// 블록 문서는 편집기가 내는 JSON 배열. type 과 inline text 만 해석하고 나머지는 그대로 보관한다.
 
-// allowedBlockTypes는 저장을 허용하는 블록 종류다. 목록에 없는 타입은 400으로
-// 거절한다. 새 클라이언트가 조용히 이상한 걸 넣는 대신 시끄럽게 실패하도록.
-// 편집기에 블록을 추가하면 여기도 함께 넓힌다.
+// allowedBlockTypes 에 없는 타입은 400. 편집기에 블록을 더하면 여기도 넓힌다.
 var allowedBlockTypes = map[string]bool{
 	// 텍스트
 	"paragraph": true,
@@ -30,26 +26,24 @@ var allowedBlockTypes = map[string]bool{
 	"tableContent": true,
 	"tableRow":     true,
 	"tableCell":    true,
-	// 미디어 — 지금은 URL 참조만 받는다. 파일 업로드는 별도 기능이고,
-	// 본문에 base64를 박는 건 1MiB 본문 제한에 바로 걸려서 허용하지 않는다.
+	// 미디어는 URL 참조만(base64 는 1MiB 본문 제한에 걸린다).
 	"image": true,
 	"video": true,
 	"audio": true,
 	"file":  true,
 }
 
-// maxBlocks는 한 카드의 블록 수 상한이다. 본문 자체는 1MiB 본문 제한에 걸리지만,
-// 깊게 중첩된 문서로 파싱을 태우는 걸 막는다.
+// maxBlocks 는 깊게 중첩된 문서로 파싱을 태우는 걸 막는다.
 const maxBlocks = 2000
 
 type block struct {
 	Type     string          `json:"type"`
+	Props    json.RawMessage `json:"props"`
 	Content  json.RawMessage `json:"content"`
 	Children []block         `json:"children"`
 }
 
-// ValidateContent는 문서가 파싱되고 모든 블록 타입이 허용 목록에 있는지 본다.
-// 반환값은 파생 평문이다.
+// ValidateContent 는 파싱·타입 허용을 확인하고 파생 평문을 준다.
 func ValidateContent(raw string) (plain string, err error) {
 	if strings.TrimSpace(raw) == "" {
 		return "", nil
@@ -84,8 +78,7 @@ func walk(blocks []block, sb *strings.Builder, n *int) error {
 	return nil
 }
 
-// appendText는 inline content에서 텍스트만 뽑는다. content는 배열이거나
-// (table처럼) 객체일 수 있어 둘 다 받는다.
+// appendText 는 inline 에서 텍스트만 뽑는다(table 은 객체).
 func appendText(raw json.RawMessage, sb *strings.Builder) {
 	if len(raw) == 0 {
 		return
@@ -116,8 +109,7 @@ func appendText(raw json.RawMessage, sb *strings.Builder) {
 	}
 }
 
-// PlainToContent는 평문을 단락 문서로 감싼다. 0003 백필과, 편집기를 쓰지 못하는
-// 클라이언트(평문 폴백)가 같은 모양을 내도록 한 곳에 둔다.
+// PlainToContent 는 평문을 단락 문서로 감싼다.
 func PlainToContent(text string) string {
 	type inline struct {
 		Type   string            `json:"type"`
@@ -146,11 +138,7 @@ func PlainToContent(text string) string {
 	return string(b)
 }
 
-// ChecklistContent은 안내 문단 하나와 체크리스트로 블록 문서를 만든다.
-//
-// 블록 문서 형식을 아는 곳은 서버 한 곳이어야 한다. 화면에서 JSON을 조립하면
-// 편집기를 바꿀 때 두 군데를 고쳐야 하고, 한 글자만 틀려도 ValidateContent가
-// 거절해 사용자에게는 이유 없는 "저장 실패"로만 보인다.
+// ChecklistContent 는 안내 문단 + 체크리스트 문서를 만든다(문서 형식은 서버 한 곳에서만 조립).
 func ChecklistContent(note string, items []string) string {
 	type inline struct {
 		Type   string            `json:"type"`
@@ -186,4 +174,35 @@ func ChecklistContent(note string, items []string) string {
 	}
 	b, _ := json.Marshal(out)
 	return string(b)
+}
+
+// ContentPhotos 는 이미지 블록의 /media/ 주소만 순서대로 뽑는다(외부 URL 은 세지 않는다).
+func ContentPhotos(raw string, limit int) []string {
+	out := []string{}
+	if strings.TrimSpace(raw) == "" {
+		return out
+	}
+	var blocks []block
+	if err := json.Unmarshal([]byte(raw), &blocks); err != nil {
+		return out
+	}
+	var walkPhotos func([]block)
+	walkPhotos = func(bs []block) {
+		for _, b := range bs {
+			if len(out) >= limit {
+				return
+			}
+			if b.Type == "image" && len(b.Props) > 0 {
+				var p struct {
+					URL string `json:"url"`
+				}
+				if json.Unmarshal(b.Props, &p) == nil && strings.HasPrefix(p.URL, "/media/") {
+					out = append(out, p.URL)
+				}
+			}
+			walkPhotos(b.Children)
+		}
+	}
+	walkPhotos(blocks)
+	return out
 }

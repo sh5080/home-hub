@@ -21,10 +21,7 @@ func rangeParams(w http.ResponseWriter, r *http.Request) (from, to string, ok bo
 	return from, to, true
 }
 
-// GET /api/calendar?from&to
-//
-// 칸반과 캘린더는 같은 데이터를 다르게 보는 뷰다. 여기서는 날짜가 있는 카드를
-// 기간으로 걸러 돌려줄 뿐이고, 별도의 '일정' 테이블은 없다.
+// GET /api/calendar?from&to — 마감이 있는 카드가 곧 일정이다(별도 표 없음).
 func (s *Server) calendar(w http.ResponseWriter, r *http.Request) {
 	from, to, ok := rangeParams(w, r)
 	if !ok {
@@ -34,7 +31,11 @@ func (s *Server) calendar(w http.ResponseWriter, r *http.Request) {
 	if s.storeErr(w, err, "calendar") {
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"cards": cards})
+	diary, err := s.st.DiaryDates(r.Context(), from[:10], to[:10])
+	if s.storeErr(w, err, "calendar diary") {
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"cards": cards, "diary_dates": diary})
 }
 
 var _ = store.SortManual // keep the store import meaningful if handlers shrink
