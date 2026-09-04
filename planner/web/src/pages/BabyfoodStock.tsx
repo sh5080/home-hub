@@ -1,33 +1,31 @@
 import { useState } from 'react'
-import { useNavigate } from 'react-router'
+import { useNavigate, useSearchParams } from 'react-router'
 import { api, type BFStock, type Card } from '../api'
 import { useBFStock, useInvalidating } from '../lib/hooks'
 import { fmtDate } from '../lib/date'
 import { Button, Field, Input, PageHeader, Sheet, SkeletonList } from '../components/ui'
 
-// 재고 화면.
-//
-// 재고를 숫자 하나로 직접 고치게 두면 종이로 적던 때와 똑같이 틀어진다.
-// 그래서 여기서는 세 가지만 한다: **실사**(지금 센 개수로 맞추기),
-// **제조 기록**(+), 그리고 그 둘로 계산된 값 보여주기. 어떻게 그 숫자가
-// 나왔는지를 줄마다 같이 보여줘서 조용히 어긋나지 않게 한다.
+// 재고. 숫자를 직접 고치지 않고 실사·제조 기록으로만 움직인다. 계산 과정을 줄마다 보여준다.
 export default function BabyfoodStock() {
   const nav = useNavigate()
   const [onlyNeeded, setOnlyNeeded] = useState(true)
   const [target, setTarget] = useState<BFStock | null>(null)
-  const q = useBFStock()
+  const [params] = useSearchParams()
+  const childID = params.get('child') ? Number(params.get('child')) : undefined
+  const suffix = childID ? `?child=${childID}` : ''
+  const q = useBFStock(undefined, childID)
 
   const count = useInvalidating(
-    (body: { name: string; qty: number }) => api.post('/api/babyfood/stock/count', body),
+    (body: { name: string; qty: number }) => api.post(`/api/babyfood/stock/count${suffix}`, body),
     [['babyfood-stock']],
   )
   const batch = useInvalidating(
-    (body: { name: string; qty: number; note: string }) => api.post('/api/babyfood/stock/batch', body),
+    (body: { name: string; qty: number; note: string }) => api.post(`/api/babyfood/stock/batch${suffix}`, body),
     [['babyfood-stock']],
   )
-  // 재고 화면에서 끝나지 않고 칸반으로 넘긴다. 본문(체크리스트)은 서버가 만든다.
+  // '제조 필요'를 장보기 카드로(본문은 서버가 만든다).
   const makeCard = useInvalidating(
-    () => api.post<Card>('/api/babyfood/stock/shopping', {}),
+    () => api.post<Card>(`/api/babyfood/stock/shopping${suffix}`, {}),
     [['boards'], ['board'], ['today'], ['calendar']],
   )
   const [cardErr, setCardErr] = useState<string | null>(null)
@@ -44,20 +42,20 @@ export default function BabyfoodStock() {
     <div className="mx-auto max-w-lg">
       <PageHeader
         title="재고"
-        back={() => nav('/babyfood')}
-        right={<Button variant="ghost" onClick={() => nav('/babyfood/foods')}>음식</Button>}
+        back={() => nav(`/babyfood${suffix}`)}
+        right={<Button variant="ghost" onClick={() => nav(`/babyfood/foods${suffix}`)}>음식</Button>}
       />
 
       <div className="px-4 pt-2">
         {q.isError && (
-          <div className="rounded-xl bg-white p-4 text-center shadow-sm">
-            <p className="text-sm text-slate-500">{(q.error as Error).message}</p>
+          <div className="rounded-2xl bg-surface p-4 text-center shadow-sm">
+            <p className="text-sm text-muted">{(q.error as Error).message}</p>
             <Button className="mt-3" onClick={() => nav('/?settings=1')}>설정 열기</Button>
           </div>
         )}
         {q.data && (
           <>
-            <p className="text-xs text-slate-400">
+            <p className="text-xs text-faint">
               {fmtDate(q.data.from)} ~ {fmtDate(q.data.to)} · {q.data.horizon_days}일치
             </p>
             <label className="mt-2 flex items-center gap-2 text-sm">
@@ -76,18 +74,18 @@ export default function BabyfoodStock() {
           if (rows.length === 0) return null
           return (
             <section key={g.key} className="px-4 pt-4">
-              <h2 className="text-sm font-bold text-slate-700">{g.label}</h2>
-              {g.hint && <p className="text-[11px] text-slate-400">{g.hint}</p>}
+              <h2 className="text-sm font-bold text-ink-2">{g.label}</h2>
+              {g.hint && <p className="text-[11px] text-faint">{g.hint}</p>}
               <ul className="mt-2 space-y-1.5">
                 {rows.map((it) => (
                   <li key={it.name}>
                     <button
                       onClick={() => setTarget(it)}
-                      className="flex w-full items-center gap-3 rounded-xl bg-white p-3 text-left shadow-sm active:bg-slate-50"
+                      className="flex w-full items-center gap-3 rounded-2xl bg-surface p-3 text-left shadow-sm active:bg-canvas"
                     >
                       <div className="min-w-0 flex-1">
                         <p className="truncate text-sm font-medium">{it.name}</p>
-                        <p className="text-[11px] text-slate-400">
+                        <p className="text-[11px] text-faint">
                           필요 {it.need} · 재고 {it.stock == null ? '아직 안 셈' : it.stock}
                           {it.stock != null && (it.used > 0 || it.made > 0) && ` (실사 ${it.count_qty} − 사용 ${it.used} + 제조 ${it.made})`}
                         </p>
@@ -108,7 +106,7 @@ export default function BabyfoodStock() {
         })}
 
       {q.data && shown.length === 0 && (
-        <p className="px-4 py-10 text-center text-sm text-slate-400">
+        <p className="px-4 py-10 text-center text-sm text-faint">
           {onlyNeeded ? '만들어야 할 게 없어요' : '재료가 없어요'}
         </p>
       )}
@@ -130,7 +128,7 @@ export default function BabyfoodStock() {
           >
             {makeCard.isPending ? '만드는 중…' : '장보기 카드 만들기'}
           </Button>
-          <p className="mt-1.5 text-center text-[11px] text-slate-400">
+          <p className="mt-1.5 text-center text-[11px] text-faint">
             만들어야 할 것들이 체크리스트로 들어간 할 일 카드가 생겨요
           </p>
           {cardErr && <p className="mt-1 text-center text-xs text-rose-500">{cardErr}</p>}
@@ -163,12 +161,12 @@ function StockForm({ item, onCount, onBatch, onClose }: {
 
   return (
     <div className="space-y-5">
-      <div className="rounded-xl bg-slate-50 p-3 text-xs text-slate-500">
-        <p>필요 <b className="text-slate-800">{item.need}</b> · 제조 필요 <b className="text-slate-800">{item.make}</b></p>
+      <div className="rounded-xl bg-canvas p-3 text-xs text-muted">
+        <p>필요 <b className="text-ink">{item.need}</b> · 제조 필요 <b className="text-ink">{item.make}</b></p>
         {item.stock == null ? (
           <p className="mt-1">아직 세어본 적이 없어서 재고를 모르는 상태예요. 지금 세서 적어두면 이후로는 자동으로 맞춰져요.</p>
         ) : (
-          <p className="mt-1">실사 {item.count_qty} − 그 뒤 사용 {item.used} + 그 뒤 제조 {item.made} = <b className="text-slate-800">{item.stock}</b></p>
+          <p className="mt-1">실사 {item.count_qty} − 그 뒤 사용 {item.used} + 그 뒤 제조 {item.made} = <b className="text-ink">{item.stock}</b></p>
         )}
       </div>
 
@@ -179,13 +177,13 @@ function StockForm({ item, onCount, onBatch, onClose }: {
         <Field label="지금 센 개수 (실사)">
           <Input inputMode="numeric" value={counted} onChange={(e) => setCounted(e.target.value)} placeholder="냉동실에 있는 개수" />
         </Field>
-        <p className="text-[11px] text-slate-400">이 값으로 기준을 다시 잡아요. 어긋났다 싶으면 언제든 다시 세면 됩니다.</p>
+        <p className="text-[11px] text-faint">이 값으로 기준을 다시 잡아요. 어긋났다 싶으면 언제든 다시 세면 됩니다.</p>
         <Button type="submit" disabled={counted.trim() === ''} className="w-full">실사로 맞추기</Button>
       </form>
 
       <form
         onSubmit={(e) => { e.preventDefault(); onBatch(Number(made), note) }}
-        className="space-y-2 border-t border-slate-100 pt-4"
+        className="space-y-2 border-t border-line pt-4"
       >
         <Field label="방금 만든 개수">
           <Input inputMode="numeric" value={made} onChange={(e) => setMade(e.target.value)} placeholder="예: 12" />

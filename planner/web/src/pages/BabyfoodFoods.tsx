@@ -1,62 +1,78 @@
 import { useMemo, useState } from 'react'
-import { useNavigate } from 'react-router'
-import { api, type BFFood } from '../api'
-import { useBFFoods, useInvalidating } from '../lib/hooks'
+import { useNavigate, useSearchParams } from 'react-router'
+import { type BFFood } from '../api'
+import { useBFFoods } from '../lib/hooks'
 import { fmtDate } from '../lib/date'
 import { Button, Input, PageHeader, SkeletonList } from '../components/ui'
 
-// 먹어본 음식을 한눈에 본다.
-//
-// 반응과 좋아함은 **서로 독립**이다. 반응이 있으면서 잘 먹을 수도 있고(그래도
-// 빼야 한다), 반응은 없는데 안 먹을 수도 있다. 그래서 한 줄에 두 개를 따로 둔다.
+// 먹어본 음식 요약. 여기서는 고치지 않는다(기록은 날짜에 달린다) — 날짜를 누르면 그날로 간다.
 export default function BabyfoodFoods() {
   const nav = useNavigate()
-  const [q, setQ] = useState('')
-  const foods = useBFFoods()
+  // ?q=<이름> 이면 그 재료만.
+  const [params] = useSearchParams()
+  const [q, setQ] = useState(() => params.get('q') ?? '')
+  const childID = params.get('child') ? Number(params.get('child')) : undefined
+  const suffix = childID ? `?child=${childID}` : ''
+  const foods = useBFFoods(childID)
 
-  const tag = useInvalidating(
-    (body: { name: string; reaction?: boolean; liked?: boolean }) =>
-      api.post<BFFood>('/api/babyfood/foods/tag', body),
-    [['babyfood'], ['babyfood-foods']],
-  )
-
-  const { reacted, liked, rest } = useMemo(() => {
+  const { reacted, liked, disliked, rest } = useMemo(() => {
     const kw = q.trim()
     const all = (foods.data ?? []).filter((f) => !kw || f.name.includes(kw))
     return {
       reacted: all.filter((f) => f.reaction),
       liked: all.filter((f) => f.liked && !f.reaction),
-      rest: all.filter((f) => !f.reaction && !f.liked),
+      disliked: all.filter((f) => f.disliked && !f.reaction && !f.liked),
+      rest: all.filter((f) => !f.reaction && !f.liked && !f.disliked),
     }
   }, [foods.data, q])
 
+  const goDay = (date: string) => nav(`/babyfood?date=${date}${childID ? `&child=${childID}` : ''}`)
+
+  const dates = (list: string[], tone: 'rose' | 'amber' | 'sky') => (
+    <span className="flex flex-wrap gap-1">
+      {list.map((d) => (
+        <button
+          key={d}
+          onClick={() => goDay(d)}
+          className={`rounded-md px-1.5 py-0.5 text-[11px] font-medium ${
+            tone === 'rose' ? 'bg-rose-100 text-rose-700'
+              : tone === 'sky' ? 'bg-sky-100 text-sky-700'
+                : 'bg-amber-100 text-amber-800'
+          }`}
+        >
+          {d.slice(5).replace('-', '/')}
+        </button>
+      ))}
+    </span>
+  )
+
   const row = (f: BFFood) => (
-    <li key={f.name} className="flex items-center gap-2 rounded-xl bg-white p-2.5 pl-3 shadow-sm">
-      <div className="min-w-0 flex-1">
-        <p className="truncate text-sm font-medium">{f.name}</p>
-        <p className="text-[11px] text-slate-400">
+    <li key={f.name} className="rounded-2xl bg-surface p-3 shadow-sm">
+      <div className="flex items-baseline gap-2">
+        <p className="min-w-0 flex-1 truncate text-sm font-medium">{f.name}</p>
+        <p className="shrink-0 text-[11px] text-faint">
           {f.first_date ? `${fmtDate(f.first_date)}부터` : '식단에 없음'}
           {f.uses > 0 && ` · ${f.uses}번`}
         </p>
       </div>
-      <button
-        onClick={() => tag.mutate({ name: f.name, reaction: !f.reaction })}
-        aria-pressed={f.reaction}
-        className={`h-8 rounded-lg px-2.5 text-xs font-semibold ${
-          f.reaction ? 'bg-rose-500 text-white' : 'bg-slate-100 text-slate-400'
-        }`}
-      >
-        반응
-      </button>
-      <button
-        onClick={() => tag.mutate({ name: f.name, liked: !f.liked })}
-        aria-pressed={f.liked}
-        className={`h-8 rounded-lg px-2.5 text-xs font-semibold ${
-          f.liked ? 'bg-amber-400 text-white' : 'bg-slate-100 text-slate-400'
-        }`}
-      >
-        좋아함
-      </button>
+      {f.reaction_dates.length > 0 && (
+        <div className="mt-1.5 flex items-center gap-1.5">
+          <span className="shrink-0 text-[11px] text-muted">반응</span>
+          {dates(f.reaction_dates, 'rose')}
+        </div>
+      )}
+      {f.liked_dates.length > 0 && (
+        <div className="mt-1 flex items-center gap-1.5">
+          <span className="shrink-0 text-[11px] text-muted">좋아함</span>
+          {dates(f.liked_dates, 'amber')}
+        </div>
+      )}
+      {f.disliked_dates.length > 0 && (
+        <div className="mt-1 flex items-center gap-1.5">
+          <span className="shrink-0 text-[11px] text-muted">싫어함</span>
+          {dates(f.disliked_dates, 'sky')}
+        </div>
+      )}
     </li>
   )
 
@@ -64,8 +80,8 @@ export default function BabyfoodFoods() {
     <div className="mx-auto max-w-lg">
       <PageHeader
         title="먹어본 음식"
-        back={() => nav('/babyfood')}
-        right={<Button variant="ghost" onClick={() => nav('/babyfood/stock')}>재고</Button>}
+        back={() => nav(`/babyfood${suffix}`)}
+        right={<Button variant="ghost" onClick={() => nav(`/babyfood/stock${suffix}`)}>재고</Button>}
       />
 
       <div className="px-4 pt-2">
@@ -82,6 +98,9 @@ export default function BabyfoodFoods() {
           <Section title="잘 먹어요" tone="amber" count={liked.length} empty="표시한 게 없어요">
             {liked.map(row)}
           </Section>
+          <Section title="잘 안 먹어요" tone="sky" count={disliked.length} empty="표시한 게 없어요">
+            {disliked.map(row)}
+          </Section>
           <Section title="그 밖에" count={rest.length}>
             {rest.map(row)}
           </Section>
@@ -93,21 +112,21 @@ export default function BabyfoodFoods() {
 
 function Section({ title, tone, count, empty, children }: {
   title: string
-  tone?: 'rose' | 'amber'
+  tone?: 'rose' | 'amber' | 'sky'
   count: number
   empty?: string
   children: React.ReactNode
 }) {
-  const dot = tone === 'rose' ? 'bg-rose-500' : tone === 'amber' ? 'bg-amber-400' : 'bg-slate-300'
+  const dot = tone === 'rose' ? 'bg-rose-500' : tone === 'amber' ? 'bg-amber-400' : tone === 'sky' ? 'bg-sky-500' : 'bg-line'
   return (
     <section className="px-4 pt-5">
-      <h2 className="flex items-center gap-1.5 text-sm font-bold text-slate-700">
+      <h2 className="flex items-center gap-1.5 text-sm font-bold text-ink-2">
         <i className={`h-2 w-2 rounded-full ${dot}`} />
         {title}
-        <span className="font-normal text-slate-400">{count}</span>
+        <span className="font-normal text-faint">{count}</span>
       </h2>
       {count === 0 ? (
-        empty && <p className="mt-1 text-xs text-slate-400">{empty}</p>
+        empty && <p className="mt-1 text-xs text-faint">{empty}</p>
       ) : (
         <ul className="mt-2 space-y-1.5">{children}</ul>
       )}
