@@ -11,13 +11,8 @@ import (
 	"time"
 )
 
-// 이유식 식단·재고.
-//
-// 식단표는 D+n(생후 일수)으로 저장한다. 날짜는 profile.birth_date 로 그때그때
-// 환산한다 — 생일을 고치면 194일치가 통째로 따라 움직여야 하기 때문이다.
-//
-// 재고는 '마지막 실사 − 그 뒤 소모 + 그 뒤 제조'로 계산한다. 숫자 하나를
-// 직접 고치는 방식은 안 고치면 바로 틀어지고, 왜 틀어졌는지도 알 수 없다.
+// 식단은 D+n(생후 일수)으로 저장하고 날짜는 생일로 그때그때 환산한다.
+// 재고 = 마지막 실사 − 그 뒤 소모 + 그 뒤 제조.
 
 const (
 	bfDefaultHorizon = 21 // 3주
@@ -26,27 +21,37 @@ const (
 	bfMaxNameLen     = 40
 )
 
-// BFProfile은 아이 정보와 계산 기준이다. 생일은 개인정보라 코드에 없다.
-type BFProfile struct {
-	Name        string  `json:"name"`
-	BirthDate   *string `json:"birth_date"`
-	HorizonDays int     `json:"horizon_days"`
-	// 파생값 — 생일이 있을 때만 채운다.
-	TodayDDay *int   `json:"today_dday"`
+// BFChild 는 이유식 대상 아이. 생년월일은 users 에 있다.
+type BFChild struct {
+	UserID      int64  `json:"user_id"`
+	Name        string `json:"name"`
+	BirthDate   string `json:"birth_date"`
+	HorizonDays int    `json:"horizon_days"`
+	// 파생값
+	TodayDDay int    `json:"today_dday"`
 	Today     string `json:"today"`
-	// 식단이 들어 있는 범위.
-	FromDDay *int `json:"from_dday"`
-	ToDDay   *int `json:"to_dday"`
+	FromDDay  *int   `json:"from_dday"`
+	ToDDay    *int   `json:"to_dday"`
+	Days      int    `json:"days"` // 들어 있는 식단 일수
+	// 하루 몇 끼일 때 몇 시에 먹이는지. {1:["12:00"], 2:[...], ...}
+	MealTimes map[int][]string `json:"meal_times"`
 }
 
-// BFProfileInput은 부분 수정이다. nil이면 안 건드린다.
-type BFProfileInput struct {
-	Name        *string
-	BirthDate   *string // "" 로 지움
-	HorizonDays *int
+// 끼니 이름은 그날 끼니 수로 정한다(1끼=점심). 저장된 slot 은 이름표일 뿐이다.
+var bfSlotNames = map[int][]string{
+	1: {"점심"},
+	2: {"점심", "저녁"},
+	3: {"아침", "점심", "저녁"},
 }
 
-// BFMealSrc는 시드 당시의 끼니 구성이다. 수정 표시("원래 …")에만 쓴다.
+// bf_meal_times 가 아직 없을 때의 기본 시각.
+var bfDefaultTimes = map[int][]string{
+	1: {"12:00"},
+	2: {"12:00", "18:00"},
+	3: {"09:00", "12:00", "18:00"},
+}
+
+// BFMealSrc 는 시드 당시의 끼니 구성(수정 표시용).
 type BFMealSrc struct {
 	Base     string   `json:"base"`
 	Toppings []string `json:"toppings"`
@@ -55,19 +60,32 @@ type BFMealSrc struct {
 
 // BFMeal은 한 끼다.
 type BFMeal struct {
-	ID       int64     `json:"id"`
-	Slot     string    `json:"slot"`
+	ID   int64  `json:"id"`
+	Slot string `json:"slot"`
+	// Title 은 그날 끼니 수로 정한 이름. 화면은 Slot 대신 이걸 쓴다.
+	Title string `json:"title"`
+	// At 은 'HH:MM'. 직접 넣은 값이 없으면 설정의 기본값.
+	At    string `json:"at"`
+	AtSet bool   `json:"at_set"`
+	// Eaten 은 이 끼니에 걸린 이유식 기록. nil 이면 아직 안 먹였다.
+	Eaten    *BFEaten  `json:"eaten"`
 	Base     string    `json:"base"`
 	Toppings []string  `json:"toppings"`
 	Snack    *string   `json:"snack"`
 	Src      BFMealSrc `json:"src"`
-	// Edited는 지금 값이 시드 원본과 다른지. 화면에서 "수정됨" 배지를 띄운다.
-	Edited   bool   `json:"edited"`
-	EatenG   *int   `json:"eaten_g"`
-	ServedG  *int   `json:"served_g"`
-	Skipped  bool   `json:"skipped"`
-	EditedBy *int64 `json:"edited_by"`
-	EditedAt *int64 `json:"edited_at"`
+	Edited   bool      `json:"edited"`
+	EatenG   *int      `json:"eaten_g"`
+	ServedG  *int      `json:"served_g"`
+	Skipped  bool      `json:"skipped"`
+	EditedBy *int64    `json:"edited_by"`
+	EditedAt *int64    `json:"edited_at"`
+}
+
+// BFEaten 은 끼니에 걸린 이유식 기록의 요약이다.
+type BFEaten struct {
+	LogID    int64  `json:"log_id"`
+	At       string `json:"at"`
+	AmountML *int   `json:"amount_ml"`
 }
 
 // BFDay는 하루치 식단이다.
@@ -81,10 +99,24 @@ type BFDay struct {
 	NewItemSrc *string  `json:"new_item_src"`
 	Note       string   `json:"note"`
 	Meals      []BFMeal `json:"meals"`
+	// 그날 남긴 반응·좋아함 기록. 표시가 있는 재료만 들어온다.
+	Logs []BFLog `json:"logs"`
 }
 
-// BFStock은 재료 한 줄이다. 재고가 어떻게 그 숫자가 됐는지 구성요소를 전부
-// 같이 준다 — 조용히 틀어지지 않게 하는 게 이 설계의 요점이다.
+// BFLog 는 (아이, 날짜, 재료) 하나의 기록.
+// 좋아함·싫어함은 서로를 끄고, 셋 다 꺼지면 행을 지운다.
+type BFLog struct {
+	DDay     int    `json:"dday"`
+	Date     string `json:"date"`
+	Name     string `json:"name"`
+	Reaction bool   `json:"reaction"`
+	Liked    bool   `json:"liked"`
+	Disliked bool   `json:"disliked"`
+	At       int64  `json:"at"`
+	By       *int64 `json:"by"`
+}
+
+// BFStock 은 재료 한 줄. 재고가 어떻게 나왔는지 구성요소를 같이 준다.
 type BFStock struct {
 	Name  string `json:"name"`
 	Kind  string `json:"kind"`
@@ -120,54 +152,12 @@ func parseDay(s string) (time.Time, error) {
 	return t, nil
 }
 
-// bfClock은 테스트가 '오늘'을 고정할 수 있게 둔 갈고리다.
+// bfClock 은 테스트가 '오늘'을 고정하는 갈고리.
 var bfClock = func() time.Time { return time.Now() }
 
 func bfToday() string { return bfClock().Format("2006-01-02") }
 
-// --- profile ---
-
-func (s *Store) bfProfileRow(ctx context.Context) (string, *string, int, error) {
-	var name string
-	var birth *string
-	var horizon int
-	err := s.db.QueryRowContext(ctx,
-		`SELECT name, birth_date, horizon_days FROM bf_profile WHERE id=1`).
-		Scan(&name, &birth, &horizon)
-	if errors.Is(err, sql.ErrNoRows) {
-		return "", nil, bfDefaultHorizon, nil
-	}
-	return name, birth, horizon, err
-}
-
-// BFProfileGet은 프로필과 함께 오늘의 D+n, 식단이 들어 있는 범위를 준다.
-func (s *Store) BFProfileGet(ctx context.Context) (BFProfile, error) {
-	name, birth, horizon, err := s.bfProfileRow(ctx)
-	if err != nil {
-		return BFProfile{}, err
-	}
-	p := BFProfile{Name: name, BirthDate: birth, HorizonDays: horizon, Today: bfToday()}
-
-	var lo, hi sql.NullInt64
-	if err := s.db.QueryRowContext(ctx,
-		`SELECT min(dday), max(dday) FROM bf_days`).Scan(&lo, &hi); err != nil {
-		return BFProfile{}, err
-	}
-	if lo.Valid {
-		a, b := int(lo.Int64), int(hi.Int64)
-		p.FromDDay, p.ToDDay = &a, &b
-	}
-	if birth != nil {
-		d, err := bfDDay(*birth, p.Today)
-		if err != nil {
-			return BFProfile{}, err
-		}
-		p.TodayDDay = &d
-	}
-	return p, nil
-}
-
-// bfDDay는 생일과 날짜로 생후 일수를 구한다.
+// bfDDay는 생년월일과 날짜로 생후 일수를 구한다.
 func bfDDay(birth, date string) (int, error) {
 	b, err := parseDay(birth)
 	if err != nil {
@@ -189,65 +179,277 @@ func bfDate(birth string, dday int) (string, error) {
 	return b.AddDate(0, 0, dday).Format("2006-01-02"), nil
 }
 
-// BFProfileSet은 프로필을 부분 수정한다.
-func (s *Store) BFProfileSet(ctx context.Context, in BFProfileInput) (BFProfile, error) {
-	name, birth, horizon, err := s.bfProfileRow(ctx)
+// --- 아이 ---
+
+// BFChildren 은 이유식 대상 아이들이다.
+func (s *Store) BFChildren(ctx context.Context) ([]BFChild, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT c.user_id, u.name, COALESCE(u.birth_date, ''), c.horizon_days,
+		       (SELECT count(*) FROM bf_days d WHERE d.child_id = c.user_id),
+		       (SELECT min(dday) FROM bf_days d WHERE d.child_id = c.user_id),
+		       (SELECT max(dday) FROM bf_days d WHERE d.child_id = c.user_id)
+		  FROM bf_children c JOIN users u ON u.id = c.user_id
+		 ORDER BY u.birth_date, u.id`)
 	if err != nil {
-		return BFProfile{}, err
+		return nil, err
 	}
-	if in.Name != nil {
-		name = strings.TrimSpace(*in.Name)
-		if len([]rune(name)) > bfMaxNameLen {
-			return BFProfile{}, invalid("이름이 너무 길어요")
+	defer rows.Close()
+	today := bfToday()
+	out := []BFChild{}
+	for rows.Next() {
+		var c BFChild
+		var lo, hi sql.NullInt64
+		if err := rows.Scan(&c.UserID, &c.Name, &c.BirthDate, &c.HorizonDays, &c.Days, &lo, &hi); err != nil {
+			return nil, err
 		}
-	}
-	if in.BirthDate != nil {
-		v := strings.TrimSpace(*in.BirthDate)
-		if v == "" {
-			birth = nil
-		} else {
-			if _, err := parseDay(v); err != nil {
-				return BFProfile{}, err
+		c.Today = today
+		if c.BirthDate != "" {
+			if c.TodayDDay, err = bfDDay(c.BirthDate, today); err != nil {
+				return nil, err
 			}
-			birth = &v
+		}
+		if lo.Valid {
+			a, b := int(lo.Int64), int(hi.Int64)
+			c.FromDDay, c.ToDDay = &a, &b
+		}
+		out = append(out, c)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	// 커넥션이 하나라 rows 를 닫은 뒤에 다음 질의를 한다.
+	times, err := s.bfAllMealTimes(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for i := range out {
+		out[i].MealTimes = times[out[i].UserID]
+		if out[i].MealTimes == nil {
+			out[i].MealTimes = bfCopyTimes(bfDefaultTimes)
 		}
 	}
-	if in.HorizonDays != nil {
-		horizon = *in.HorizonDays
-		if horizon < 1 || horizon > bfMaxHorizon {
-			return BFProfile{}, invalid(fmt.Sprintf("기간은 1~%d일 사이여야 해요", bfMaxHorizon))
+	return out, nil
+}
+
+// bfAllMealTimes는 아이별 시간표를 한 번에 읽는다.
+func (s *Store) bfAllMealTimes(ctx context.Context) (map[int64]map[int][]string, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT child_id, n, pos, at FROM bf_meal_times ORDER BY child_id, n, pos`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[int64]map[int][]string{}
+	for rows.Next() {
+		var child int64
+		var n, pos int
+		var at string
+		if err := rows.Scan(&child, &n, &pos, &at); err != nil {
+			return nil, err
+		}
+		if out[child] == nil {
+			out[child] = map[int][]string{}
+		}
+		for len(out[child][n]) < pos {
+			out[child][n] = append(out[child][n], "")
+		}
+		out[child][n] = append(out[child][n], at)
+	}
+	return out, rows.Err()
+}
+
+func bfCopyTimes(src map[int][]string) map[int][]string {
+	out := make(map[int][]string, len(src))
+	for k, v := range src {
+		out[k] = append([]string(nil), v...)
+	}
+	return out
+}
+
+// bfChild 는 한 아이를 찾는다.
+func (s *Store) bfChild(ctx context.Context, childID int64) (BFChild, error) {
+	all, err := s.BFChildren(ctx)
+	if err != nil {
+		return BFChild{}, err
+	}
+	for _, c := range all {
+		if c.UserID == childID {
+			if c.BirthDate == "" {
+				return BFChild{}, invalid("아이의 생년월일이 없어요")
+			}
+			return c, nil
 		}
 	}
-	if _, err := s.db.ExecContext(ctx,
-		`INSERT INTO bf_profile (id, name, birth_date, horizon_days, updated_at)
-		 VALUES (1, ?, ?, ?, ?)
-		 ON CONFLICT(id) DO UPDATE SET
-		   name=excluded.name, birth_date=excluded.birth_date,
-		   horizon_days=excluded.horizon_days, updated_at=excluded.updated_at`,
-		name, birth, horizon, time.Now().Unix()); err != nil {
-		return BFProfile{}, err
+	return BFChild{}, ErrNotFound
+}
+
+// BFAddChild는 가족 한 명을 이유식 대상으로 삼는다.
+func (s *Store) BFAddChild(ctx context.Context, userID int64, horizon int) error {
+	if horizon <= 0 {
+		horizon = bfDefaultHorizon
 	}
-	return s.BFProfileGet(ctx)
+	if horizon < 1 || horizon > bfMaxHorizon {
+		return invalid(fmt.Sprintf("기간은 1~%d일 사이여야 해요", bfMaxHorizon))
+	}
+	var birth *string
+	err := s.db.QueryRowContext(ctx, `SELECT birth_date FROM users WHERE id=?`, userID).Scan(&birth)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if birth == nil || *birth == "" {
+		return invalid("먼저 가족 설정에서 생년월일을 넣어주세요")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO bf_children (user_id, horizon_days, created_at) VALUES (?, ?, ?)
+		ON CONFLICT(user_id) DO UPDATE SET horizon_days=excluded.horizon_days`,
+		userID, horizon, time.Now().Unix()); err != nil {
+		return err
+	}
+	if err := bfSeedMealTimes(ctx, tx, userID); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// bfCheckTime 은 'HH:MM'(초 없음)인지 본다.
+func bfCheckTime(v string) error {
+	if len(v) != 5 || v[2] != ':' {
+		return invalid("시각은 09:00 처럼 적어주세요")
+	}
+	h := (int(v[0]-'0'))*10 + int(v[1]-'0')
+	m := (int(v[3]-'0'))*10 + int(v[4]-'0')
+	for _, c := range []byte{v[0], v[1], v[3], v[4]} {
+		if c < '0' || c > '9' {
+			return invalid("시각은 09:00 처럼 적어주세요")
+		}
+	}
+	if h > 23 || m > 59 {
+		return invalid("시각은 09:00 처럼 적어주세요")
+	}
+	return nil
+}
+
+// BFSetMealTimes 는 '하루 n끼일 때'의 기본 시각을 정한다(끼니 수마다 따로).
+func (s *Store) BFSetMealTimes(ctx context.Context, childID int64, n int, times []string) error {
+	if n < 1 || n > len(bfSlotNames) {
+		return invalid(fmt.Sprintf("하루 1~%d끼까지예요", len(bfSlotNames)))
+	}
+	if len(times) != n {
+		return invalid(fmt.Sprintf("%d끼면 시각도 %d개예요", n, n))
+	}
+	prev := ""
+	for i, v := range times {
+		v = strings.TrimSpace(v)
+		if err := bfCheckTime(v); err != nil {
+			return err
+		}
+		if i > 0 && v <= prev {
+			return invalid("시각은 앞에서 뒤로 가야 해요")
+		}
+		times[i], prev = v, v
+	}
+	if _, err := s.bfChild(ctx, childID); err != nil {
+		return err
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `DELETE FROM bf_meal_times WHERE child_id=? AND n=?`, childID, n); err != nil {
+		return err
+	}
+	for i, v := range times {
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO bf_meal_times (child_id, n, pos, at) VALUES (?, ?, ?, ?)`,
+			childID, n, i, v); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// bfSeedMealTimes는 새로 들어온 아이에게 기본 시간표를 깔아준다.
+func bfSeedMealTimes(ctx context.Context, tx *sql.Tx, childID int64) error {
+	for n, times := range bfDefaultTimes {
+		for i, v := range times {
+			if _, err := tx.ExecContext(ctx,
+				`INSERT INTO bf_meal_times (child_id, n, pos, at) VALUES (?, ?, ?, ?)
+				 ON CONFLICT(child_id, n, pos) DO NOTHING`, childID, n, i, v); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// BFRemoveChild 는 대상에서만 뺀다. 식단·재고 기록은 남긴다.
+func (s *Store) BFRemoveChild(ctx context.Context, userID int64) error {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM bf_children WHERE user_id=?`, userID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// BFAdoptOrphans 는 child_id 가 없는 이유식 자료를 한 아이에게 붙인다.
+func (s *Store) BFAdoptOrphans(ctx context.Context, childID int64) (int64, error) {
+	if _, err := s.bfChild(ctx, childID); err != nil {
+		return 0, err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	res, err := tx.ExecContext(ctx, `UPDATE bf_days SET child_id=? WHERE child_id IS NULL`, childID)
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	for _, q := range []string{
+		`UPDATE bf_ingredients SET child_id=? WHERE child_id IS NULL`,
+		`UPDATE bf_batches SET child_id=? WHERE child_id IS NULL`,
+	} {
+		if _, err := tx.ExecContext(ctx, q, childID); err != nil {
+			return 0, err
+		}
+	}
+	return n, tx.Commit()
 }
 
 // --- 조회 ---
 
 // BFRange는 [from, to] 구간(D+n 기준)의 식단을 돌려준다.
-func (s *Store) BFRange(ctx context.Context, from, to int) ([]BFDay, error) {
+func (s *Store) BFRange(ctx context.Context, childID int64, from, to int) ([]BFDay, error) {
 	if to < from {
 		return nil, invalid("범위가 거꾸로예요")
 	}
 	if to-from > 400 {
 		return nil, invalid("한 번에 400일까지만 볼 수 있어요")
 	}
-	_, birth, _, err := s.bfProfileRow(ctx)
+	child, err := s.bfChild(ctx, childID)
 	if err != nil {
 		return nil, err
 	}
+	birth := &child.BirthDate
 
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT dday, stage, label, kind, new_item, new_item_src, note
-		   FROM bf_days WHERE dday BETWEEN ? AND ? ORDER BY dday`, from, to)
+		   FROM bf_days WHERE child_id=? AND dday BETWEEN ? AND ? ORDER BY dday`, childID, from, to)
 	if err != nil {
 		return nil, err
 	}
@@ -266,7 +468,7 @@ func (s *Store) BFRange(ctx context.Context, from, to int) ([]BFDay, error) {
 				return nil, err
 			}
 		}
-		d.Meals = []BFMeal{}
+		d.Meals, d.Logs = []BFMeal{}, []BFLog{}
 		days[d.DDay] = &d
 		order = append(order, d.DDay)
 	}
@@ -278,12 +480,12 @@ func (s *Store) BFRange(ctx context.Context, from, to int) ([]BFDay, error) {
 		return []BFDay{}, nil
 	}
 
-	// 끼니 + 구성품을 각각 한 번씩 읽어 Go에서 붙인다. 끼니마다 질의하면
-	// 커넥션이 하나뿐이라 그대로 왕복 비용이 된다.
+	// 끼니·구성품을 각각 한 번에 읽는다(커넥션 하나 — 끼니마다 묻지 않는다).
 	meals := map[int64]*BFMeal{}
 	mrows, err := s.db.QueryContext(ctx,
-		`SELECT id, dday, slot, src, eaten_g, served_g, skipped, edited_by, edited_at
-		   FROM bf_meals WHERE dday BETWEEN ? AND ? ORDER BY dday, pos`, from, to)
+		`SELECT m.id, d.dday, m.slot, m.at, m.src, m.eaten_g, m.served_g, m.skipped, m.edited_by, m.edited_at
+		   FROM bf_meals m JOIN bf_days d ON d.id = m.day_id
+		  WHERE d.child_id=? AND d.dday BETWEEN ? AND ? ORDER BY d.dday, m.pos`, childID, from, to)
 	if err != nil {
 		return nil, err
 	}
@@ -297,12 +499,14 @@ func (s *Store) BFRange(ctx context.Context, from, to int) ([]BFDay, error) {
 		var dday int
 		var src string
 		var skipped int
-		if err := mrows.Scan(&m.ID, &dday, &m.Slot, &src, &m.EatenG, &m.ServedG,
+		var at sql.NullString
+		if err := mrows.Scan(&m.ID, &dday, &m.Slot, &at, &src, &m.EatenG, &m.ServedG,
 			&skipped, &m.EditedBy, &m.EditedAt); err != nil {
 			mrows.Close()
 			return nil, err
 		}
 		m.Skipped = skipped != 0
+		m.At, m.AtSet = at.String, at.Valid && at.String != ""
 		if err := json.Unmarshal([]byte(src), &m.Src); err != nil {
 			mrows.Close()
 			return nil, fmt.Errorf("meal %d src: %w", m.ID, err)
@@ -323,8 +527,10 @@ func (s *Store) BFRange(ctx context.Context, from, to int) ([]BFDay, error) {
 
 	irows, err := s.db.QueryContext(ctx,
 		`SELECT i.meal_id, i.role, i.name
-		   FROM bf_meal_items i JOIN bf_meals m ON m.id = i.meal_id
-		  WHERE m.dday BETWEEN ? AND ? ORDER BY i.meal_id, i.role, i.pos`, from, to)
+		   FROM bf_meal_items i
+		   JOIN bf_meals m ON m.id = i.meal_id
+		   JOIN bf_days  d ON d.id = m.day_id
+		  WHERE d.child_id=? AND d.dday BETWEEN ? AND ? ORDER BY i.meal_id, i.role, i.pos`, childID, from, to)
 	if err != nil {
 		return nil, err
 	}
@@ -354,12 +560,76 @@ func (s *Store) BFRange(ctx context.Context, from, to int) ([]BFDay, error) {
 		return nil, err
 	}
 
+	lrows, err := s.db.QueryContext(ctx,
+		`SELECT dday, name, reaction, liked, disliked, logged_at, logged_by
+		   FROM bf_logs WHERE child_id=? AND dday BETWEEN ? AND ? ORDER BY dday, name`,
+		childID, from, to)
+	if err != nil {
+		return nil, err
+	}
+	for lrows.Next() {
+		var l BFLog
+		var reaction, liked, disliked int
+		if err := lrows.Scan(&l.DDay, &l.Name, &reaction, &liked, &disliked, &l.At, &l.By); err != nil {
+			lrows.Close()
+			return nil, err
+		}
+		l.Reaction, l.Liked, l.Disliked = reaction != 0, liked != 0, disliked != 0
+		if birth != nil {
+			if l.Date, err = bfDate(*birth, l.DDay); err != nil {
+				lrows.Close()
+				return nil, err
+			}
+		}
+		if d := days[l.DDay]; d != nil {
+			d.Logs = append(d.Logs, l)
+		}
+	}
+	lrows.Close()
+	if err := lrows.Err(); err != nil {
+		return nil, err
+	}
+
+	// 먹인 기록은 아래 루프가 끼니를 값으로 복사하기 전에 붙여야 한다.
+	if len(flat) > 0 {
+		ph := strings.TrimSuffix(strings.Repeat("?,", len(flat)), ",")
+		ids := make([]any, len(flat))
+		for i, f := range flat {
+			ids[i] = f.meal.ID
+		}
+		erows, err := s.db.QueryContext(ctx,
+			`SELECT meal_id, id, at, amount_ml FROM care_logs WHERE meal_id IN (`+ph+`) ORDER BY at`, ids...)
+		if err != nil {
+			return nil, err
+		}
+		for erows.Next() {
+			var mid int64
+			var e BFEaten
+			if err := erows.Scan(&mid, &e.LogID, &e.At, &e.AmountML); err != nil {
+				erows.Close()
+				return nil, err
+			}
+			if m := meals[mid]; m != nil {
+				v := e
+				m.Eaten = &v
+			}
+		}
+		erows.Close()
+		if err := erows.Err(); err != nil {
+			return nil, err
+		}
+	}
+
 	for _, f := range flat {
 		f.meal.Edited = mealDiffers(*f.meal)
 		if d := days[f.dday]; d != nil {
 			d.Meals = append(d.Meals, *f.meal)
 		}
 	}
+	for _, d := range days {
+		bfNameMeals(d, child.MealTimes)
+	}
+
 	out := make([]BFDay, 0, len(order))
 	for _, k := range order {
 		out = append(out, *days[k])
@@ -367,7 +637,30 @@ func (s *Store) BFRange(ctx context.Context, from, to int) ([]BFDay, error) {
 	return out, nil
 }
 
+// bfNameMeals 는 끼니 수로 이름을, 기본 시간표로 시각을 채운다.
+// 4끼 이상이면 저장된 이름표를 그대로 둔다.
+func bfNameMeals(d *BFDay, times map[int][]string) {
+	n := len(d.Meals)
+	names, at := bfSlotNames[n], times[n]
+	if at == nil {
+		at = bfDefaultTimes[n]
+	}
+	for i := range d.Meals {
+		m := &d.Meals[i]
+		m.Title = m.Slot
+		if i < len(names) {
+			m.Title = names[i]
+		}
+		if !m.AtSet && i < len(at) {
+			m.At = at[i]
+		}
+	}
+}
+
 func mealDiffers(m BFMeal) bool {
+	if m.AtSet {
+		return true
+	}
 	if m.Base != m.Src.Base || len(m.Toppings) != len(m.Src.Toppings) {
 		return true
 	}
@@ -396,7 +689,9 @@ type BFMealInput struct {
 	EatenG   *int    // 음수면 지움
 	ServedG  *int
 	Skipped  *bool
-	// Reset이 true면 나머지를 무시하고 시드 원본으로 되돌린다.
+	// At은 'HH:MM'. ""를 주면 설정의 기본 시각으로 되돌린다.
+	At *string
+	// Reset 이면 나머지를 무시하고 시드 원본으로(시각도 기본값으로).
 	Reset bool
 }
 
@@ -414,12 +709,14 @@ func bfCleanName(s string) (string, error) {
 // BFUpdateMeal은 한 끼를 고친다. 구성품은 통째로 다시 쓴다.
 func (s *Store) BFUpdateMeal(ctx context.Context, id int64, in BFMealInput, userID int64) (BFDay, error) {
 	var dday int
+	var childID int64
 	var srcRaw string
 	var base sql.NullString
 	err := s.db.QueryRowContext(ctx,
-		`SELECT m.dday, m.src,
+		`SELECT d.dday, d.child_id, m.src,
 		        (SELECT name FROM bf_meal_items WHERE meal_id=m.id AND role='base' LIMIT 1)
-		   FROM bf_meals m WHERE m.id=?`, id).Scan(&dday, &srcRaw, &base)
+		   FROM bf_meals m JOIN bf_days d ON d.id = m.day_id
+		  WHERE m.id=?`, id).Scan(&dday, &childID, &srcRaw, &base)
 	if errors.Is(err, sql.ErrNoRows) {
 		return BFDay{}, ErrNotFound
 	}
@@ -431,8 +728,7 @@ func (s *Store) BFUpdateMeal(ctx context.Context, id int64, in BFMealInput, user
 		return BFDay{}, err
 	}
 
-	// 현재 구성품을 읽어 변경분만 덮어쓴다. tx를 잡기 **전에** 읽는다 —
-	// 커넥션이 하나라 tx 안에서 Query 하면 그대로 멈춘다.
+	// tx 를 잡기 전에 읽는다 — 커넥션이 하나라 tx 안에서 Query 하면 멈춘다.
 	cur := BFMealSrc{Base: base.String, Toppings: []string{}}
 	trows, err := s.db.QueryContext(ctx,
 		`SELECT role, name FROM bf_meal_items WHERE meal_id=? ORDER BY role, pos`, id)
@@ -511,24 +807,24 @@ func (s *Store) BFUpdateMeal(ctx context.Context, id int64, in BFMealInput, user
 		return BFDay{}, err
 	}
 	if next.Base != "" {
-		if err := bfPutItem(ctx, tx, id, "base", 0, next.Base); err != nil {
+		if err := bfPutItem(ctx, tx, childID, id, "base", 0, next.Base); err != nil {
 			return BFDay{}, err
 		}
 	}
 	for i, t := range next.Toppings {
-		if err := bfPutItem(ctx, tx, id, "topping", i, t); err != nil {
+		if err := bfPutItem(ctx, tx, childID, id, "topping", i, t); err != nil {
 			return BFDay{}, err
 		}
 	}
 	if next.Snack != nil {
-		if err := bfPutItem(ctx, tx, id, "snack", 0, *next.Snack); err != nil {
+		if err := bfPutItem(ctx, tx, childID, id, "snack", 0, *next.Snack); err != nil {
 			return BFDay{}, err
 		}
 	}
 
 	if in.Reset {
 		if _, err := tx.ExecContext(ctx,
-			`UPDATE bf_meals SET edited_by=NULL, edited_at=NULL WHERE id=?`, id); err != nil {
+			`UPDATE bf_meals SET edited_by=NULL, edited_at=NULL, at=NULL WHERE id=?`, id); err != nil {
 			return BFDay{}, err
 		}
 	} else {
@@ -556,11 +852,26 @@ func (s *Store) BFUpdateMeal(ctx context.Context, id int64, in BFMealInput, user
 			return BFDay{}, err
 		}
 	}
+	if in.At != nil && !in.Reset {
+		v := strings.TrimSpace(*in.At)
+		if v == "" {
+			if _, err := tx.ExecContext(ctx, `UPDATE bf_meals SET at=NULL WHERE id=?`, id); err != nil {
+				return BFDay{}, err
+			}
+		} else {
+			if err := bfCheckTime(v); err != nil {
+				return BFDay{}, err
+			}
+			if _, err := tx.ExecContext(ctx, `UPDATE bf_meals SET at=? WHERE id=?`, v, id); err != nil {
+				return BFDay{}, err
+			}
+		}
+	}
 	if err := tx.Commit(); err != nil {
 		return BFDay{}, err
 	}
 
-	days, err := s.BFRange(ctx, dday, dday)
+	days, err := s.BFRange(ctx, childID, dday, dday)
 	if err != nil || len(days) == 0 {
 		return BFDay{}, err
 	}
@@ -571,7 +882,7 @@ func bfSetGrams(ctx context.Context, tx *sql.Tx, id int64, col string, v int) er
 	if v > 5000 {
 		return invalid("양이 너무 커요")
 	}
-	// col은 호출부에서 고정 문자열로만 준다 — 사용자 입력이 아니다.
+	// col 은 호출부의 고정 문자열뿐이다.
 	q := "UPDATE bf_meals SET " + col + "=? WHERE id=?"
 	if v < 0 {
 		_, err := tx.ExecContext(ctx, "UPDATE bf_meals SET "+col+"=NULL WHERE id=?", id)
@@ -582,14 +893,14 @@ func bfSetGrams(ctx context.Context, tx *sql.Tx, id int64, col string, v int) er
 }
 
 // bfPutItem은 구성품 한 줄을 쓰고, 처음 보는 재료면 재료 목록에도 넣는다.
-func bfPutItem(ctx context.Context, tx *sql.Tx, mealID int64, role string, pos int, name string) error {
+func bfPutItem(ctx context.Context, tx *sql.Tx, childID, mealID int64, role string, pos int, name string) error {
 	kind := "cube"
 	if role == "base" {
 		kind = "base"
 	}
 	if _, err := tx.ExecContext(ctx,
-		`INSERT INTO bf_ingredients (name, kind) VALUES (?, ?) ON CONFLICT(name) DO NOTHING`,
-		name, kind); err != nil {
+		`INSERT INTO bf_ingredients (child_id, name, kind) VALUES (?, ?, ?)
+		 ON CONFLICT(child_id, name) DO NOTHING`, childID, name, kind); err != nil {
 		return err
 	}
 	_, err := tx.ExecContext(ctx,
@@ -598,15 +909,14 @@ func bfPutItem(ctx context.Context, tx *sql.Tx, mealID int64, role string, pos i
 	return err
 }
 
-// BFDayInput은 하루 단위 정보(메모, NEW 재료) 수정이다. 알레르기·좋아함은
-// 날짜가 아니라 재료에 달린다 — BFTagFood 를 쓴다.
+// BFDayInput 은 메모·NEW 재료 수정. 반응·좋아함은 BFSetLog.
 type BFDayInput struct {
 	Note    *string
 	NewItem *string // "" 로 지움
 }
 
 // BFUpdateDay는 그날의 메모와 NEW 재료를 고친다.
-func (s *Store) BFUpdateDay(ctx context.Context, dday int, in BFDayInput) (BFDay, error) {
+func (s *Store) BFUpdateDay(ctx context.Context, childID int64, dday int, in BFDayInput) (BFDay, error) {
 	sets := []string{}
 	args := []any{}
 	if in.Note != nil {
@@ -630,17 +940,17 @@ func (s *Store) BFUpdateDay(ctx context.Context, dday int, in BFDayInput) (BFDay
 	if len(sets) == 0 {
 		return BFDay{}, invalid("바꿀 내용이 없어요")
 	}
-	args = append(args, dday)
-	// sets의 원소는 전부 위에서 만든 상수 문자열이고 값은 ? 로만 들어간다.
+	args = append(args, childID, dday)
+	// sets 는 상수 문자열뿐, 값은 전부 ? 로 들어간다.
 	res, err := s.db.ExecContext(ctx,
-		"UPDATE bf_days SET "+strings.Join(sets, ", ")+" WHERE dday=?", args...)
+		"UPDATE bf_days SET "+strings.Join(sets, ", ")+" WHERE child_id=? AND dday=?", args...)
 	if err != nil {
 		return BFDay{}, err
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
 		return BFDay{}, ErrNotFound
 	}
-	days, err := s.BFRange(ctx, dday, dday)
+	days, err := s.BFRange(ctx, childID, dday, dday)
 	if err != nil || len(days) == 0 {
 		return BFDay{}, err
 	}
@@ -649,51 +959,38 @@ func (s *Store) BFUpdateDay(ctx context.Context, dday int, in BFDayInput) (BFDay
 
 // --- 재고 ---
 
-// BFStockList는 오늘부터 horizon일치 필요량과 현재 재고를 계산한다.
-//
-// 구간이 겹치지 않게 나눈다:
-//   - 소모(used): 실사 다음날 ~ **어제**
-//   - 필요(need): **오늘** ~ 오늘+horizon-1
-//
-// 오늘 먹일 몫은 '이미 쓴 것'이 아니라 '앞으로 필요한 것'으로 센다. 겹치면
-// 오늘치가 두 번 빠진다.
-func (s *Store) BFStockList(ctx context.Context, horizon int) (BFStockView, error) {
-	p, err := s.BFProfileGet(ctx)
+// BFStockList 는 오늘부터 horizon 일치 필요량과 현재 재고를 계산한다.
+// 소모 = 실사 다음날 ~ 어제, 필요 = 오늘 ~ 오늘+horizon-1 (겹치면 오늘치가 두 번 빠진다).
+func (s *Store) BFStockList(ctx context.Context, childID int64, horizon int) (BFStockView, error) {
+	child, err := s.bfChild(ctx, childID)
 	if err != nil {
 		return BFStockView{}, err
 	}
-	if p.BirthDate == nil {
-		return BFStockView{}, invalid("먼저 아이 생일을 설정해주세요")
-	}
-	if p.TodayDDay == nil {
-		return BFStockView{}, invalid("생일이 올바르지 않아요")
-	}
 	if horizon <= 0 {
-		horizon = p.HorizonDays
+		horizon = child.HorizonDays
 	}
 	if horizon < 1 || horizon > bfMaxHorizon {
 		return BFStockView{}, invalid(fmt.Sprintf("기간은 1~%d일 사이여야 해요", bfMaxHorizon))
 	}
-	from := *p.TodayDDay
+	from := child.TodayDDay
 	to := from + horizon - 1
 
-	need, err := s.bfCountItems(ctx, from, to)
+	need, err := s.bfCountItems(ctx, childID, from, to)
 	if err != nil {
 		return BFStockView{}, err
 	}
-	// 소모는 재료마다 실사 시점이 달라서 (재료, 날짜)별로 받아 Go에서 자른다.
-	past, err := s.bfCountItemsByDay(ctx, from)
+	past, err := s.bfCountItemsByDay(ctx, childID, from)
 	if err != nil {
 		return BFStockView{}, err
 	}
-	batches, err := s.bfBatchTotals(ctx)
+	batches, err := s.bfBatchTotals(ctx, childID)
 	if err != nil {
 		return BFStockView{}, err
 	}
 
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT name, kind, count_qty, count_dday, count_at, count_batch_id
-		   FROM bf_ingredients ORDER BY name`)
+		   FROM bf_ingredients WHERE child_id=? ORDER BY name`, childID)
 	if err != nil {
 		return BFStockView{}, err
 	}
@@ -724,8 +1021,7 @@ func (s *Store) BFStockList(ctx context.Context, horizon int) (BFStockView, erro
 				it.Make = d
 			}
 		} else {
-			// 실사한 적 없으면 재고를 '모름'으로 둔다. 0으로 단정하면
-			// 냉동실에 있는 걸 또 만들게 된다.
+			// 실사한 적 없으면 재고는 '모름'이다 — 0 으로 두면 있는 걸 또 만든다.
 			it.Make = it.Need
 		}
 		out = append(out, it)
@@ -734,23 +1030,22 @@ func (s *Store) BFStockList(ctx context.Context, horizon int) (BFStockView, erro
 		return BFStockView{}, err
 	}
 
-	fromDate, _ := bfDate(*p.BirthDate, from)
-	toDate, _ := bfDate(*p.BirthDate, to)
+	fromDate, _ := bfDate(child.BirthDate, from)
+	toDate, _ := bfDate(child.BirthDate, to)
 	return BFStockView{
 		From: fromDate, To: toDate, FromDDay: from, ToDDay: to,
 		HorizonDays: horizon, Items: out,
 	}, nil
 }
 
-// bfCountItems는 [from,to]에서 재료별 사용 횟수를 센다. 'menu' 구간은 큐브가
-// 아니므로, 건너뛴 끼니는 먹지 않았으므로 제외한다.
-func (s *Store) bfCountItems(ctx context.Context, from, to int) (map[string]int, error) {
+// bfCountItems 는 [from,to] 재료별 사용 횟수. menu 구간과 건너뛴 끼니는 뺀다.
+func (s *Store) bfCountItems(ctx context.Context, childID int64, from, to int) (map[string]int, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT i.name, count(*) FROM bf_meal_items i
 		   JOIN bf_meals m ON m.id = i.meal_id
-		   JOIN bf_days  d ON d.dday = m.dday
-		  WHERE d.kind='topping' AND m.skipped=0 AND m.dday BETWEEN ? AND ?
-		  GROUP BY i.name`, from, to)
+		   JOIN bf_days  d ON d.id = m.day_id
+		  WHERE d.child_id=? AND d.kind='topping' AND m.skipped=0 AND d.dday BETWEEN ? AND ?
+		  GROUP BY i.name`, childID, from, to)
 	if err != nil {
 		return nil, err
 	}
@@ -772,15 +1067,14 @@ type bfDayCount struct {
 	n    int
 }
 
-// bfCountItemsByDay는 today 이전의 소모를 (재료, 날짜)별로 준다. 재료마다
-// 실사 시점이 달라서 한 덩어리로 합칠 수 없다.
-func (s *Store) bfCountItemsByDay(ctx context.Context, today int) (map[string][]bfDayCount, error) {
+// bfCountItemsByDay 는 today 이전 소모를 (재료, 날짜)별로 준다 — 재료마다 실사 시점이 다르다.
+func (s *Store) bfCountItemsByDay(ctx context.Context, childID int64, today int) (map[string][]bfDayCount, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT i.name, m.dday, count(*) FROM bf_meal_items i
+		`SELECT i.name, d.dday, count(*) FROM bf_meal_items i
 		   JOIN bf_meals m ON m.id = i.meal_id
-		   JOIN bf_days  d ON d.dday = m.dday
-		  WHERE d.kind='topping' AND m.skipped=0 AND m.dday < ?
-		  GROUP BY i.name, m.dday`, today)
+		   JOIN bf_days  d ON d.id = m.day_id
+		  WHERE d.child_id=? AND d.kind='topping' AND m.skipped=0 AND d.dday < ?
+		  GROUP BY i.name, d.dday`, childID, today)
 	if err != nil {
 		return nil, err
 	}
@@ -802,9 +1096,9 @@ type bfBatch struct {
 	qty int
 }
 
-func (s *Store) bfBatchTotals(ctx context.Context) (map[string][]bfBatch, error) {
+func (s *Store) bfBatchTotals(ctx context.Context, childID int64) (map[string][]bfBatch, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT name, id, qty FROM bf_batches ORDER BY name, id`)
+		`SELECT name, id, qty FROM bf_batches WHERE child_id=? ORDER BY name, id`, childID)
 	if err != nil {
 		return nil, err
 	}
@@ -821,9 +1115,8 @@ func (s *Store) bfBatchTotals(ctx context.Context) (map[string][]bfBatch, error)
 	return out, rows.Err()
 }
 
-// BFCount는 실사다. 지금 냉동실에 있는 개수를 그대로 적는다. 이 시점 이후의
-// 소모·제조만 다시 반영되므로, 어긋났을 때 되돌릴 수 있는 유일한 손잡이다.
-func (s *Store) BFCount(ctx context.Context, name string, qty int, userID int64) error {
+// BFCount 는 실사다. 이후의 소모·제조만 다시 반영된다.
+func (s *Store) BFCount(ctx context.Context, childID int64, name string, qty int, userID int64) error {
 	name, err := bfCleanName(name)
 	if err != nil {
 		return err
@@ -834,16 +1127,16 @@ func (s *Store) BFCount(ctx context.Context, name string, qty int, userID int64)
 	if qty < 0 || qty > 9999 {
 		return invalid("수량은 0 이상이어야 해요")
 	}
-	dday, err := s.bfTodayDDay(ctx)
+	dday, err := s.bfTodayDDay(ctx, childID)
 	if err != nil {
 		return err
 	}
 	res, err := s.db.ExecContext(ctx,
 		`UPDATE bf_ingredients
 		    SET count_qty=?, count_dday=?, count_at=?, count_by=?,
-		        count_batch_id=(SELECT COALESCE(max(id), 0) FROM bf_batches)
-		  WHERE name=?`,
-		qty, dday, time.Now().Unix(), userID, name)
+		        count_batch_id=(SELECT COALESCE(max(id), 0) FROM bf_batches WHERE child_id=?)
+		  WHERE child_id=? AND name=?`,
+		qty, dday, time.Now().Unix(), userID, childID, childID, name)
 	if err != nil {
 		return err
 	}
@@ -853,8 +1146,8 @@ func (s *Store) BFCount(ctx context.Context, name string, qty int, userID int64)
 	return nil
 }
 
-// BFAddBatch는 큐브를 만든 기록이다(+). 실사 이후의 것만 재고에 더해진다.
-func (s *Store) BFAddBatch(ctx context.Context, name string, qty int, note string, userID int64) error {
+// BFAddBatch 는 큐브 제조 기록. 실사 이후 것만 재고에 더해진다.
+func (s *Store) BFAddBatch(ctx context.Context, childID int64, name string, qty int, note string, userID int64) error {
 	name, err := bfCleanName(name)
 	if err != nil {
 		return err
@@ -869,7 +1162,7 @@ func (s *Store) BFAddBatch(ctx context.Context, name string, qty int, note strin
 	if len([]rune(note)) > 200 {
 		return invalid("메모가 너무 길어요")
 	}
-	dday, err := s.bfTodayDDay(ctx)
+	dday, err := s.bfTodayDDay(ctx, childID)
 	if err != nil {
 		return err
 	}
@@ -879,64 +1172,78 @@ func (s *Store) BFAddBatch(ctx context.Context, name string, qty int, note strin
 	}
 	defer tx.Rollback()
 	if _, err := tx.ExecContext(ctx,
-		`INSERT INTO bf_ingredients (name, kind) VALUES (?, 'cube') ON CONFLICT(name) DO NOTHING`,
-		name); err != nil {
+		`INSERT INTO bf_ingredients (child_id, name, kind) VALUES (?, ?, 'cube')
+		 ON CONFLICT(child_id, name) DO NOTHING`, childID, name); err != nil {
 		return err
 	}
 	if _, err := tx.ExecContext(ctx,
-		`INSERT INTO bf_batches (name, qty, made_dday, made_at, made_by, note)
-		 VALUES (?, ?, ?, ?, ?, ?)`,
-		name, qty, dday, time.Now().Unix(), userID, note); err != nil {
+		`INSERT INTO bf_batches (child_id, name, qty, made_dday, made_at, made_by, note)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		childID, name, qty, dday, time.Now().Unix(), userID, note); err != nil {
 		return err
 	}
 	return tx.Commit()
 }
 
-func (s *Store) bfTodayDDay(ctx context.Context) (int, error) {
-	_, birth, _, err := s.bfProfileRow(ctx)
+func (s *Store) bfTodayDDay(ctx context.Context, childID int64) (int, error) {
+	c, err := s.bfChild(ctx, childID)
 	if err != nil {
 		return 0, err
 	}
-	if birth == nil {
-		return 0, invalid("먼저 아이 생일을 설정해주세요")
-	}
-	return bfDDay(*birth, bfToday())
+	return c.TodayDDay, nil
 }
 
-// BFDDayOf는 생일과 날짜로 생후 일수를 구한다. 핸들러가 ?from=YYYY-MM-DD 를
-// 저장 형식으로 바꿀 때 쓴다.
+// BFDDayOf 는 생일과 날짜로 생후 일수(D+n, 태어난 날=0)를 구한다.
 func BFDDayOf(birth, date string) (int, error) { return bfDDay(birth, date) }
 
-// --- 음식별 표시 (알레르기 반응 / 좋아함) ---
+// --- 음식별 표시 ---
 
-// BFFood는 재료 한 종류와 거기 달린 표시다.
+// BFFood 는 재료 한 종류와 기록 요약이다.
 type BFFood struct {
 	Name string `json:"name"`
-	Kind string `json:"kind"` // 'base' | 'cube' | 'dish'
-	// 둘은 서로 독립이다. 반응이 있으면서 잘 먹을 수도 있다.
-	Reaction bool   `json:"reaction"`
-	Liked    bool   `json:"liked"`
-	TagAt    *int64 `json:"tag_at"`
-	TagBy    *int64 `json:"tag_by"`
-	// 처음 나오는 날. "언제부터 먹었나"를 짚을 수 있게 같이 준다.
-	FirstDDay *int   `json:"first_dday"`
-	FirstDate string `json:"first_date"`
-	Uses      int    `json:"uses"`
+	// 검색처럼 여러 아이를 섞어 보여줄 때만 채운다.
+	ChildID   int64  `json:"child_id,omitempty"`
+	ChildName string `json:"child_name,omitempty"`
+	Kind      string `json:"kind"` // 'base' | 'cube' | 'dish'
+	// 한 번이라도 있었으면 true.
+	Reaction      bool     `json:"reaction"`
+	Liked         bool     `json:"liked"`
+	Disliked      bool     `json:"disliked"`
+	ReactionDates []string `json:"reaction_dates"`
+	LikedDates    []string `json:"liked_dates"`
+	DislikedDates []string `json:"disliked_dates"`
+	LastAt        *int64   `json:"last_at"`
+	LastBy        *int64   `json:"last_by"`
+	FirstDDay     *int     `json:"first_dday"`
+	FirstDate     string   `json:"first_date"`
+	Uses          int      `json:"uses"`
 }
 
-// BFFoods는 식단에 나오는 모든 재료를 표시와 함께 돌려준다. 목록이 100종
-// 남짓이라 한 번에 주고 화면에서 나눈다.
-func (s *Store) BFFoods(ctx context.Context) ([]BFFood, error) {
-	_, birth, _, err := s.bfProfileRow(ctx)
+// BFFoods 는 재료 전부를 요약과 함께 준다.
+func (s *Store) BFFoods(ctx context.Context, childID int64) ([]BFFood, error) {
+	child, err := s.bfChild(ctx, childID)
 	if err != nil {
 		return nil, err
 	}
+	birth := child.BirthDate
+
+	// 기록을 먼저 통째로 읽어 둔다(재료마다 묻지 않는다).
+	logs, err := s.bfLogsByName(ctx, childID, birth)
+	if err != nil {
+		return nil, err
+	}
+
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT i.name, i.kind, i.reaction, i.liked, i.tag_at, i.tag_by,
-		        (SELECT min(m.dday) FROM bf_meal_items x JOIN bf_meals m ON m.id = x.meal_id
-		          WHERE x.name = i.name),
-		        (SELECT count(*) FROM bf_meal_items x WHERE x.name = i.name)
-		   FROM bf_ingredients i ORDER BY i.name`)
+		`SELECT i.name, i.kind,
+		        (SELECT min(d.dday) FROM bf_meal_items x
+		           JOIN bf_meals m ON m.id = x.meal_id
+		           JOIN bf_days  d ON d.id = m.day_id
+		          WHERE x.name = i.name AND d.child_id = i.child_id),
+		        (SELECT count(*) FROM bf_meal_items x
+		           JOIN bf_meals m ON m.id = x.meal_id
+		           JOIN bf_days  d ON d.id = m.day_id
+		          WHERE x.name = i.name AND d.child_id = i.child_id)
+		   FROM bf_ingredients i WHERE i.child_id=? ORDER BY i.name`, childID)
 	if err != nil {
 		return nil, err
 	}
@@ -944,19 +1251,38 @@ func (s *Store) BFFoods(ctx context.Context) ([]BFFood, error) {
 	out := []BFFood{}
 	for rows.Next() {
 		var f BFFood
-		var reaction, liked int
 		var first sql.NullInt64
-		if err := rows.Scan(&f.Name, &f.Kind, &reaction, &liked, &f.TagAt, &f.TagBy, &first, &f.Uses); err != nil {
+		if err := rows.Scan(&f.Name, &f.Kind, &first, &f.Uses); err != nil {
 			return nil, err
 		}
-		f.Reaction, f.Liked = reaction != 0, liked != 0
+		f.ReactionDates, f.LikedDates, f.DislikedDates = []string{}, []string{}, []string{}
+		for _, l := range logs[f.Name] {
+			when := l.Date
+			if when == "" {
+				when = fmt.Sprintf("D+%d", l.DDay)
+			}
+			if l.Reaction {
+				f.Reaction = true
+				f.ReactionDates = append(f.ReactionDates, when)
+			}
+			if l.Liked {
+				f.Liked = true
+				f.LikedDates = append(f.LikedDates, when)
+			}
+			if l.Disliked {
+				f.Disliked = true
+				f.DislikedDates = append(f.DislikedDates, when)
+			}
+			if f.LastAt == nil || l.At > *f.LastAt {
+				at, by := l.At, l.By
+				f.LastAt, f.LastBy = &at, by
+			}
+		}
 		if first.Valid {
 			d := int(first.Int64)
 			f.FirstDDay = &d
-			if birth != nil {
-				if f.FirstDate, err = bfDate(*birth, d); err != nil {
-					return nil, err
-				}
+			if f.FirstDate, err = bfDate(birth, d); err != nil {
+				return nil, err
 			}
 		}
 		out = append(out, f)
@@ -964,54 +1290,122 @@ func (s *Store) BFFoods(ctx context.Context) ([]BFFood, error) {
 	return out, rows.Err()
 }
 
-// BFFoodTag는 재료에 달 표시다. nil이면 안 건드린다.
+// bfLogsByName은 한 아이의 기록 전부를 재료 이름으로 묶어 돌려준다.
+func (s *Store) bfLogsByName(ctx context.Context, childID int64, birth string) (map[string][]BFLog, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT dday, name, reaction, liked, disliked, logged_at, logged_by
+		   FROM bf_logs WHERE child_id=? ORDER BY dday`, childID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string][]BFLog{}
+	for rows.Next() {
+		var l BFLog
+		var reaction, liked, disliked int
+		if err := rows.Scan(&l.DDay, &l.Name, &reaction, &liked, &disliked, &l.At, &l.By); err != nil {
+			return nil, err
+		}
+		l.Reaction, l.Liked, l.Disliked = reaction != 0, liked != 0, disliked != 0
+		if l.Date, err = bfDate(birth, l.DDay); err != nil {
+			return nil, err
+		}
+		out[l.Name] = append(out[l.Name], l)
+	}
+	return out, rows.Err()
+}
+
+// BFFoodTag는 그날 그 재료에 남길 표시다. nil이면 안 건드린다.
 type BFFoodTag struct {
 	Reaction *bool
 	Liked    *bool
+	Disliked *bool
 }
 
-// BFTagFood는 알레르기 반응·좋아함을 켜고 끈다.
-func (s *Store) BFTagFood(ctx context.Context, name string, in BFFoodTag, userID int64) (BFFood, error) {
+// BFSetLog 는 하루치 기록을 남긴다. 표시가 모두 꺼지면 행을 지운다.
+func (s *Store) BFSetLog(ctx context.Context, childID int64, dday int, name string, in BFFoodTag, userID int64) (BFDay, error) {
 	name, err := bfCleanName(name)
 	if err != nil {
-		return BFFood{}, err
+		return BFDay{}, err
 	}
 	if name == "" {
-		return BFFood{}, invalid("재료를 골라주세요")
+		return BFDay{}, invalid("재료를 골라주세요")
 	}
-	if in.Reaction == nil && in.Liked == nil {
-		return BFFood{}, invalid("바꿀 내용이 없어요")
+	if in.Reaction == nil && in.Liked == nil && in.Disliked == nil {
+		return BFDay{}, invalid("바꿀 내용이 없어요")
 	}
-	sets := []string{"tag_at=?", "tag_by=?"}
-	args := []any{time.Now().Unix(), userID}
-	if in.Reaction != nil {
-		sets = append(sets, "reaction=?")
-		args = append(args, boolInt(*in.Reaction))
+	if _, err := s.bfChild(ctx, childID); err != nil {
+		return BFDay{}, err
 	}
-	if in.Liked != nil {
-		sets = append(sets, "liked=?")
-		args = append(args, boolInt(*in.Liked))
+	var cur BFLog
+	var reaction, liked, disliked int
+	had := true
+	err = s.db.QueryRowContext(ctx,
+		`SELECT reaction, liked, disliked FROM bf_logs WHERE child_id=? AND dday=? AND name=?`,
+		childID, dday, name).Scan(&reaction, &liked, &disliked)
+	switch {
+	case err == sql.ErrNoRows:
+		had = false
+	case err != nil:
+		return BFDay{}, err
 	}
-	args = append(args, name)
-	// sets 의 원소는 전부 위에서 만든 상수 문자열이고 값은 ? 로만 들어간다.
-	res, err := s.db.ExecContext(ctx,
-		"UPDATE bf_ingredients SET "+strings.Join(sets, ", ")+" WHERE name=?", args...)
-	if err != nil {
-		return BFFood{}, err
-	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		return BFFood{}, ErrNotFound
-	}
-	foods, err := s.BFFoods(ctx)
-	if err != nil {
-		return BFFood{}, err
-	}
-	for _, f := range foods {
-		if f.Name == name {
-			return f, nil
+	cur.Reaction, cur.Liked, cur.Disliked = reaction != 0, liked != 0, disliked != 0
+
+	// 새 기록은 그날 식단에 있는 재료에만 남긴다. 이미 있는 행은 고칠 수 있다.
+	if !had {
+		var onMenu int
+		if err := s.db.QueryRowContext(ctx,
+			`SELECT count(*) FROM bf_days d
+			  WHERE d.child_id=? AND d.dday=?
+			    AND (d.new_item = ?
+			         OR EXISTS (SELECT 1 FROM bf_meals m
+			                      JOIN bf_meal_items x ON x.meal_id = m.id
+			                     WHERE m.day_id = d.id AND x.name = ?))`,
+			childID, dday, name, name).Scan(&onMenu); err != nil {
+			return BFDay{}, err
+		}
+		if onMenu == 0 {
+			return BFDay{}, ErrNotFound
 		}
 	}
-	return BFFood{}, ErrNotFound
+	if in.Reaction != nil {
+		cur.Reaction = *in.Reaction
+	}
+	if in.Liked != nil {
+		cur.Liked = *in.Liked
+		// 좋아함과 싫어함은 서로를 끈다. 켠 쪽이 이긴다.
+		if cur.Liked {
+			cur.Disliked = false
+		}
+	}
+	if in.Disliked != nil {
+		cur.Disliked = *in.Disliked
+		if cur.Disliked {
+			cur.Liked = false
+		}
+	}
+
+	if !cur.Reaction && !cur.Liked && !cur.Disliked {
+		if _, err := s.db.ExecContext(ctx,
+			`DELETE FROM bf_logs WHERE child_id=? AND dday=? AND name=?`, childID, dday, name); err != nil {
+			return BFDay{}, err
+		}
+	} else if _, err := s.db.ExecContext(ctx,
+		`INSERT INTO bf_logs (child_id, dday, name, reaction, liked, disliked, logged_at, logged_by)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(child_id, dday, name) DO UPDATE SET
+		   reaction=excluded.reaction, liked=excluded.liked, disliked=excluded.disliked,
+		   logged_at=excluded.logged_at, logged_by=excluded.logged_by`,
+		childID, dday, name, boolInt(cur.Reaction), boolInt(cur.Liked), boolInt(cur.Disliked),
+		time.Now().Unix(), userID); err != nil {
+		return BFDay{}, err
+	}
+
+	days, err := s.BFRange(ctx, childID, dday, dday)
+	if err != nil || len(days) == 0 {
+		return BFDay{}, err
+	}
+	return days[0], nil
 }
 
 func boolInt(b bool) int {
@@ -1021,19 +1415,12 @@ func boolInt(b bool) int {
 	return 0
 }
 
-// --- 재고를 할 일로 ---
-
-// BFShoppingCard는 기간 내 '제조 필요'를 장보기 카드 한 장으로 만든다.
-//
-// 재고 화면이 "소고기 21, 당근 21"까지 알려주고 끝나면 그 숫자를 사람이
-// 머리로 옮겨 적어야 한다. 카드로 만들어 두면 칸반·홈·캘린더에 그대로
-// 나타나고, 체크하면서 장을 볼 수 있다.
-func (s *Store) BFShoppingCard(ctx context.Context, horizon int, userID int64) (Card, error) {
-	view, err := s.BFStockList(ctx, horizon)
+// BFShoppingCard 는 기간 내 '제조 필요'를 장보기 카드 한 장으로 만든다.
+func (s *Store) BFShoppingCard(ctx context.Context, childID int64, horizon int, userID int64) (Card, error) {
+	view, err := s.BFStockList(ctx, childID, horizon)
 	if err != nil {
 		return Card{}, err
 	}
-	// 많이 필요한 것부터. 장 볼 때 큰 것을 먼저 챙긴다.
 	need := make([]BFStock, 0, len(view.Items))
 	for _, it := range view.Items {
 		if it.Make > 0 {
@@ -1066,8 +1453,7 @@ func (s *Store) BFShoppingCard(ctx context.Context, horizon int, userID int64) (
 	return s.CreateCard(ctx, col, CardInput{Title: &title, Content: &content, DueAt: &due}, userID)
 }
 
-// firstColumn은 첫 보드의 첫 컬럼('할 일')이다. 보드 규칙은 이름이 아니라
-// 위치로 정해져 있다 — README의 칸반 규칙과 같은 근거를 쓴다.
+// firstColumn 은 첫 보드의 첫 칸(= 할 일). 칸의 뜻은 이름이 아니라 위치다.
 func (s *Store) firstColumn(ctx context.Context) (int64, error) {
 	var id int64
 	err := s.db.QueryRowContext(ctx, `

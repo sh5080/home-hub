@@ -7,13 +7,9 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"time"
 )
 
-// 식단 데이터 파일을 읽어 들인다.
-//
-// 내용은 저장소에 없다 — 파일로 받아서 여기서만 채운다. 파일을 갈아끼우면
-// 새 구간을 붙일 수 있고, 코드를 고칠 일은 없다.
+// 식단 데이터 파일(JSON)을 읽는다. 내용은 저장소에 없다.
 
 // BFPlanFile은 식단 데이터 파일의 최상위 구조다.
 type BFPlanFile struct {
@@ -23,7 +19,6 @@ type BFPlanFile struct {
 	Ingredients  []BFPlanIngr    `json:"ingredients"`
 }
 
-// BFPlanSection은 한 구간(초기 / 중기 … )이다.
 type BFPlanSection struct {
 	ID    string      `json:"id"`
 	Label string      `json:"label"`
@@ -33,14 +28,13 @@ type BFPlanSection struct {
 	Days  []BFPlanDay `json:"days"`
 }
 
-// BFPlanDay는 하루다. D는 생후 일수.
+// BFPlanDay 는 하루. D 는 생후 일수.
 type BFPlanDay struct {
 	D     int          `json:"d"`
 	New   string       `json:"new"`
 	Meals []BFPlanMeal `json:"meals"`
 }
 
-// BFPlanMeal은 한 끼다.
 type BFPlanMeal struct {
 	Slot     string   `json:"slot"`
 	Base     string   `json:"base"`
@@ -48,25 +42,22 @@ type BFPlanMeal struct {
 	Snack    *string  `json:"snack"`
 }
 
-// BFPlanIngr는 재료 분류다. 'base'/'cube'는 큐브로 세고 'dish'는 그날 만드는
-// 요리라 재고 화면에서 따로 묶는다.
+// BFPlanIngr 는 재료 분류. base/cube 는 큐브로 세고 dish 는 따로 묶는다.
 type BFPlanIngr struct {
 	Name string `json:"name"`
 	Kind string `json:"kind"`
 }
 
-// BFImportPlan은 가져오기 결과 요약이다. dry-run에서도 같은 값을 만든다.
+// BFImportPlan 은 가져오기 요약(dry-run 도 같은 값).
 type BFImportPlan struct {
 	Sections []BFImportSection `json:"sections"`
-	// Existing은 이미 들어 있어서 건드리지 않는 날 수다. 손으로 고친 내용을
-	// 덮어쓰지 않기 위해 기본은 '건너뛴다'.
+	// Existing 은 이미 있어서 건너뛴 날 수(손으로 고친 걸 덮지 않는다).
 	Existing    int `json:"existing"`
 	NewDays     int `json:"new_days"`
 	NewMeals    int `json:"new_meals"`
 	Ingredients int `json:"ingredients"`
 }
 
-// BFImportSection은 구간별 요약이다.
 type BFImportSection struct {
 	ID    string `json:"id"`
 	Label string `json:"label"`
@@ -115,8 +106,7 @@ func ParseBFPlan(raw []byte) (*BFPlanFile, error) {
 	return &f, nil
 }
 
-// BFSelectTrack은 쓸 구간들을 골라 D+n 순서로 편다. 같은 D+n을 여러 구간이
-// 채우면(중기 두 끼 / 세 끼) 먼저 고른 쪽이 이긴다.
+// BFSelectTrack 은 고른 구간을 D+n 순으로 편다. 같은 D+n 은 먼저 고른 쪽이 이긴다.
 func BFSelectTrack(f *BFPlanFile, track []string) ([]BFPlanSection, error) {
 	if len(track) == 0 {
 		track = f.DefaultTrack
@@ -146,22 +136,16 @@ func BFSelectTrack(f *BFPlanFile, track []string) ([]BFPlanSection, error) {
 	return out, nil
 }
 
-// BFImport는 고른 구간을 넣는다. apply가 false면 아무것도 쓰지 않고 요약만
-// 돌려준다 — 가져오기는 되돌리기 어려우니 기본을 dry-run으로 둔다.
-//
-// replace가 false면 **이미 있는 날은 건너뛴다**. 손으로 고쳐둔 식단을
-// 덮어쓰지 않기 위해서다.
-//
-// fromDDay가 0보다 크면 그 날 이후만 다룬다. 중기 두 끼 → 세 끼처럼 도중에
-// 구성을 바꿀 때, 이미 지나간 날의 기록까지 건드리지 않기 위한 것이다.
-func (s *Store) BFImport(ctx context.Context, f *BFPlanFile, track []string, apply, replace bool, fromDDay int) (BFImportPlan, error) {
+// BFImport 는 고른 구간을 넣는다. apply=false 면 요약만(기본 dry-run).
+// replace=false 면 이미 있는 날은 건너뛴다. fromDDay>0 이면 그 날 이후만.
+func (s *Store) BFImport(ctx context.Context, childID int64, f *BFPlanFile, track []string, apply, replace bool, fromDDay int) (BFImportPlan, error) {
 	secs, err := BFSelectTrack(f, track)
 	if err != nil {
 		return BFImportPlan{}, err
 	}
 
 	existing := map[int]bool{}
-	rows, err := s.db.QueryContext(ctx, `SELECT dday FROM bf_days`)
+	rows, err := s.db.QueryContext(ctx, `SELECT dday FROM bf_days WHERE child_id=?`, childID)
 	if err != nil {
 		return BFImportPlan{}, err
 	}
@@ -215,16 +199,15 @@ func (s *Store) BFImport(ctx context.Context, f *BFPlanFile, track []string, app
 	}
 	defer tx.Rollback()
 
-	// 재료 분류를 먼저 넣는다. 이미 있으면 kind만 맞춘다(재고 수치는 건드리지
-	// 않는다 — 실사값을 날리면 안 된다).
+	// 재료는 kind 만 맞춘다 — 실사값은 건드리지 않는다.
 	for _, ing := range f.Ingredients {
 		kind := ing.Kind
 		if kind == "" {
 			kind = "cube"
 		}
 		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO bf_ingredients (name, kind) VALUES (?, ?)
-			 ON CONFLICT(name) DO UPDATE SET kind=excluded.kind`, ing.Name, kind); err != nil {
+			`INSERT INTO bf_ingredients (child_id, name, kind) VALUES (?, ?, ?)
+			 ON CONFLICT(child_id, name) DO UPDATE SET kind=excluded.kind`, childID, ing.Name, kind); err != nil {
 			return BFImportPlan{}, err
 		}
 	}
@@ -232,7 +215,7 @@ func (s *Store) BFImport(ctx context.Context, f *BFPlanFile, track []string, app
 	for _, w := range writes {
 		if replace {
 			// bf_meals / bf_meal_items 는 ON DELETE CASCADE 로 따라 지워진다.
-			if _, err := tx.ExecContext(ctx, `DELETE FROM bf_days WHERE dday=?`, w.day.D); err != nil {
+			if _, err := tx.ExecContext(ctx, `DELETE FROM bf_days WHERE child_id=? AND dday=?`, childID, w.day.D); err != nil {
 				return BFImportPlan{}, err
 			}
 		}
@@ -241,12 +224,14 @@ func (s *Store) BFImport(ctx context.Context, f *BFPlanFile, track []string, app
 			v := w.day.New
 			newItem = &v
 		}
-		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO bf_days (dday, stage, label, kind, new_item, new_item_src)
-			 VALUES (?, ?, ?, ?, ?, ?)`,
-			w.day.D, w.sec.ID, w.sec.Label, w.sec.Kind, newItem, newItem); err != nil {
+		dayRes, err := tx.ExecContext(ctx,
+			`INSERT INTO bf_days (child_id, dday, stage, label, kind, new_item, new_item_src)
+			 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			childID, w.day.D, w.sec.ID, w.sec.Label, w.sec.Kind, newItem, newItem)
+		if err != nil {
 			return BFImportPlan{}, err
 		}
+		dayID, _ := dayRes.LastInsertId()
 		for i, m := range w.day.Meals {
 			tops := m.Toppings
 			if tops == nil {
@@ -257,48 +242,42 @@ func (s *Store) BFImport(ctx context.Context, f *BFPlanFile, track []string, app
 				return BFImportPlan{}, err
 			}
 			res, err := tx.ExecContext(ctx,
-				`INSERT INTO bf_meals (dday, slot, pos, src) VALUES (?, ?, ?, ?)`,
-				w.day.D, m.Slot, i, string(src))
+				`INSERT INTO bf_meals (day_id, slot, pos, src) VALUES (?, ?, ?, ?)`,
+				dayID, m.Slot, i, string(src))
 			if err != nil {
 				return BFImportPlan{}, err
 			}
 			id, _ := res.LastInsertId()
 			if m.Base != "" {
-				if err := bfPutItem(ctx, tx, id, "base", 0, m.Base); err != nil {
+				if err := bfPutItem(ctx, tx, childID, id, "base", 0, m.Base); err != nil {
 					return BFImportPlan{}, err
 				}
 			}
 			for j, t := range tops {
-				if err := bfPutItem(ctx, tx, id, "topping", j, t); err != nil {
+				if err := bfPutItem(ctx, tx, childID, id, "topping", j, t); err != nil {
 					return BFImportPlan{}, err
 				}
 			}
 			if m.Snack != nil && *m.Snack != "" {
-				if err := bfPutItem(ctx, tx, id, "snack", 0, *m.Snack); err != nil {
+				if err := bfPutItem(ctx, tx, childID, id, "snack", 0, *m.Snack); err != nil {
 					return BFImportPlan{}, err
 				}
 			}
 		}
 	}
 
-	// 프로필 행이 없으면 만들어 둔다. 생일은 넣지 않는다 — 화면에서 받는다.
-	if _, err := tx.ExecContext(ctx,
-		`INSERT INTO bf_profile (id, horizon_days, updated_at) VALUES (1, ?, ?)
-		 ON CONFLICT(id) DO NOTHING`, bfDefaultHorizon, time.Now().Unix()); err != nil {
-		return BFImportPlan{}, err
-	}
 	if err := tx.Commit(); err != nil {
 		return BFImportPlan{}, err
 	}
 	return plan, nil
 }
 
-// BFApplyEdit은 가져온 직후 "손으로 고쳐둔 것"을 그대로 반영할 때 쓴다.
-// 시드 원본은 그대로 두고 현재 값만 바꾸므로 화면에 "수정됨 · 원래 …"로 뜬다.
-func (s *Store) BFApplyEdit(ctx context.Context, dday int, slot string, in BFMealInput, userID int64) error {
+// BFApplyEdit 은 가져온 직후 손으로 고친 것을 반영한다(시드 원본은 그대로).
+func (s *Store) BFApplyEdit(ctx context.Context, childID int64, dday int, slot string, in BFMealInput, userID int64) error {
 	var id int64
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id FROM bf_meals WHERE dday=? AND slot=?`, dday, slot).Scan(&id)
+		`SELECT m.id FROM bf_meals m JOIN bf_days d ON d.id = m.day_id
+		  WHERE d.child_id=? AND d.dday=? AND m.slot=?`, childID, dday, slot).Scan(&id)
 	if err == sql.ErrNoRows {
 		return ErrNotFound
 	}
