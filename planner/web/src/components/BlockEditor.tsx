@@ -1,5 +1,5 @@
 
-import { useMemo } from 'react'
+import { useEffect, useMemo } from 'react'
 import {
   useCreateBlockNote,
   SuggestionMenuController,
@@ -10,17 +10,17 @@ import { BlockNoteView } from '@blocknote/mantine'
 import { BlockNoteSchema, defaultBlockSpecs, filterSuggestionItems, type PartialBlock } from '@blocknote/core'
 import { ko } from '@blocknote/core/locales'
 import { Callout } from './Callout'
+import { useResolvedTheme } from '../lib/theme'
+import { uploadMedia } from '../api'
 import '@blocknote/core/fonts/inter.css'
 import '@blocknote/mantine/style.css'
 import './blockeditor.css'
 
-// 기본 블록 + 직접 만든 콜아웃.
 const schema = BlockNoteSchema.create({
   blockSpecs: { ...defaultBlockSpecs, callout: Callout() },
 })
 
-// 슬래시 메뉴를 한국어로 다시 이름 붙이고 묶는다. BlockNote 기본 항목은
-// 영문 키워드만 쥐고 있어서 "제목"이나 "체크"로 검색이 안 된다.
+// 슬래시 메뉴를 한국어로(기본 항목은 영문 키워드만 있다).
 const LABELS: Record<string, { title: string; group: string; aliases: string[] }> = {
   'Heading 1':        { title: '제목 1',      group: '제목',   aliases: ['h1', '큰제목', 'jemok'] },
   'Heading 2':        { title: '제목 2',      group: '제목',   aliases: ['h2', 'jemok'] },
@@ -41,28 +41,37 @@ const LABELS: Record<string, { title: string; group: string; aliases: string[] }
   'Emoji':            { title: '이모지',      group: '기본',   aliases: ['emoji', '이모티콘'] },
 }
 
+// 스키마가 박힌 편집기 타입.
+export type Editor = typeof schema.BlockNoteEditor
+
 export default function BlockEditor({
   initial,
   onChange,
+  onReady,
   editable = true,
 }: {
   initial: string | null
   onChange?: (json: string) => void
+  /** 바깥에서 블록을 끼워 넣을 수 있게 편집기를 넘긴다. */
+  onReady?: (editor: Editor) => void
   editable?: boolean
 }) {
+  // 편집기 색 체계는 prop 으로 넘겨야 한다(<html class="dark"> 만으로는 글자가 묻힌다).
+  const theme = useResolvedTheme()
+
   const editor = useCreateBlockNote({
     schema,
     dictionary: ko,
     initialContent: parseInitial(initial),
-    // 본문이 비었을 때 무엇을 할 수 있는지 알려준다 — 슬래시 메뉴는
-    // 존재를 모르면 아무도 안 쓴다.
     placeholders: {
       emptyDocument: "입력하거나 '/' 를 눌러 블록 추가",
       default: "'/' 로 블록 추가",
     },
+    uploadFile: async (file: File) => (await uploadMedia(file)).url,
   })
 
-  // 기본 항목을 한국어로 바꾸고 콜아웃을 끼워 넣는다.
+  useEffect(() => { onReady?.(editor) }, [editor, onReady])
+
   const items = useMemo<DefaultReactSuggestionItem[]>(() => {
     const base = getDefaultReactSlashMenuItems(editor).map((item) => {
       const l = LABELS[item.title]
@@ -92,9 +101,7 @@ export default function BlockEditor({
     ]
   }, [editor])
 
-  // 노션처럼, 본문 아래 빈 곳을 누르면 단락이 하나 생긴다.
-  // 마지막 블록이 이미 빈 단락이면 새로 만들지 않고 커서만 옮긴다 —
-  // 여러 번 눌렀다고 빈 줄이 쌓이면 곤란하다.
+  // 본문 아래 빈 곳을 누르면 단락이 생긴다. 마지막이 빈 단락이면 커서만 옮긴다.
   function appendParagraph() {
     const blocks = editor.document
     const last = blocks[blocks.length - 1]
@@ -114,7 +121,7 @@ export default function BlockEditor({
       <BlockNoteView
         editor={editor}
         editable={editable}
-        theme="light"
+        theme={theme}
         slashMenu={false} // 아래에서 한국어 메뉴로 대체
         onChange={() => onChange?.(JSON.stringify(editor.document))}
       >
@@ -123,8 +130,6 @@ export default function BlockEditor({
           getItems={async (query) => filterSuggestionItems(items, query)}
         />
       </BlockNoteView>
-      {/* 본문 아래 빈 곳 — 누르면 단락이 생긴다(노션과 같은 동작).
-          cursor-text 로 "여기 쓸 수 있다"는 걸 알린다. */}
       {editable && <div onClick={appendParagraph} aria-hidden className="min-h-[35vh] flex-1 cursor-text" />}
     </div>
   )

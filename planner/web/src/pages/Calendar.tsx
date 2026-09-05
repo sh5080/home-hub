@@ -1,16 +1,16 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router'
 import { api, type Card } from '../api'
-import { useCalendar, useInvalidating, useBoards, useUsers } from '../lib/hooks'
+import { useCalendar, useDiary, useInvalidating, useBoards, useUsers } from '../lib/hooks'
 import { addDays, addMonths, ampm, fmtDate, fmtTime, hasTime, startOfMonth, startOfWeek, today, weekdayIndex, WEEKDAYS } from '../lib/date'
 import { Avatar, Button, Field, Input, PageHeader, Sheet, SkeletonList } from '../components/ui'
+import { useDiaryViewer } from '../components/DiaryViewer'
 import { Stars } from '../components/SortToggle'
 
-// 캘린더는 별도 데이터가 아니라 **날짜가 있는 카드**를 기간으로 보는 뷰다.
-// 여기서 만든 항목도 카드이므로 칸반에서 그대로 보이고, 반대도 마찬가지다.
+// 캘린더는 날짜가 있는 카드를 기간으로 보는 뷰다.
 export default function Calendar() {
   const nav = useNavigate()
-  // ?date=YYYY-MM-DD 로 특정 날짜를 열 수 있다 — 홈의 "앞으로 7일"에서 넘어온다.
+  // ?date= 로 특정 날짜를 연다.
   const [params, setParams] = useSearchParams()
   const linked = params.get('date')
   const valid = (d: string | null) => !!d && /^\d{4}-\d{2}-\d{2}$/.test(d)
@@ -20,14 +20,12 @@ export default function Calendar() {
   const [selected, setSelectedState] = useState(initial)
   const [adding, setAdding] = useState(false)
 
-  // 날짜를 고를 때마다 주소를 갱신하되 히스토리에 쌓지 않는다 — 뒤로가기가
-  // 날짜 선택을 하나씩 되짚는 건 원하는 동작이 아니다.
+  // 날짜 선택은 주소만 바꾸고 히스토리에 쌓지 않는다.
   const setSelected = (d: string) => {
     setSelectedState(d)
     setParams({ date: d }, { replace: true })
   }
 
-  // 홈에서 다른 날짜로 다시 들어오면 그 날짜로 옮긴다.
   useEffect(() => {
     if (valid(linked) && linked !== selected) {
       setSelectedState(linked!)
@@ -37,7 +35,7 @@ export default function Calendar() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [linked])
 
-  // 그리드는 그 달 1일이 속한 주의 일요일부터 6주
+  // 그리드는 1일이 속한 주의 일요일부터 6주
   const gridStart = startOfWeek(month)
   const gridEnd = addDays(gridStart, 42)
   const cal = useCalendar(gridStart, gridEnd)
@@ -49,7 +47,7 @@ export default function Calendar() {
     [['calendar'], ['board'], ['boards'], ['today']],
   )
 
-  // 날짜 → 그날의 카드. 여러 날 항목은 걸치는 날마다 펼친다.
+  // 여러 날 항목은 걸치는 날마다 펼친다.
   const byDate = useMemo(() => {
     const m = new Map<string, Card[]>()
     for (const c of cal.data?.cards ?? []) {
@@ -68,6 +66,7 @@ export default function Calendar() {
   const days = Array.from({ length: 42 }, (_, i) => addDays(gridStart, i))
   const monthNum = Number(month.slice(5, 7))
   const sel = byDate.get(selected) ?? []
+  const hasDiary = new Set(cal.data?.diary_dates ?? [])
   const userName = (id: number | null) => users.data?.find((u) => u.id === id)?.name
 
   return (
@@ -76,20 +75,20 @@ export default function Calendar() {
         title={`${month.slice(0, 4)}년 ${monthNum}월`}
         right={
           <div className="flex items-center gap-1">
-            <button onClick={() => setMonth(addMonths(month, -1))} className="rounded-lg px-2 py-1 text-slate-500 active:bg-slate-200">‹</button>
-            <button onClick={() => { setMonth(startOfMonth(today())); setSelected(today()) }} className="rounded-lg px-2 py-1 text-xs font-medium text-slate-600 active:bg-slate-200">오늘</button>
-            <button onClick={() => setMonth(addMonths(month, 1))} className="rounded-lg px-2 py-1 text-slate-500 active:bg-slate-200">›</button>
+            <button onClick={() => setMonth(addMonths(month, -1))} className="rounded-lg px-2 py-1 text-muted active:bg-line">‹</button>
+            <button onClick={() => { setMonth(startOfMonth(today())); setSelected(today()) }} className="rounded-lg px-2 py-1 text-xs font-medium text-ink-2 active:bg-line">오늘</button>
+            <button onClick={() => setMonth(addMonths(month, 1))} className="rounded-lg px-2 py-1 text-muted active:bg-line">›</button>
           </div>
         }
       />
 
+
       <div className="px-2 pt-2">
-        {/* 점 색이 뭘 뜻하는지 — 두 색뿐이라 오전/오후로 오해하기 쉽다 */}
-        <div className="mb-1.5 flex items-center justify-end gap-3 px-1 text-[10px] text-slate-400">
+        <div className="mb-1.5 flex items-center justify-end gap-3 px-1 text-[10px] text-faint">
           <span className="flex items-center gap-1"><i className="h-1.5 w-1.5 rounded-full bg-sky-500" />시간 약속</span>
           <span className="flex items-center gap-1"><i className="h-1.5 w-1.5 rounded-full bg-amber-500" />종일</span>
         </div>
-        <div className="grid grid-cols-7 text-center text-[11px] text-slate-400">
+        <div className="grid grid-cols-7 text-center text-[11px] text-faint">
           {WEEKDAYS.map((w, i) => (
             <div key={w} className={i === 0 ? 'text-rose-400' : i === 6 ? 'text-sky-400' : ''}>{w}</div>
           ))}
@@ -105,15 +104,19 @@ export default function Calendar() {
               <button
                 key={d}
                 onClick={() => setSelected(d)}
-                className={`flex h-14 flex-col items-center rounded-xl pt-1 ${isSel ? 'bg-slate-900 text-white' : inMonth ? 'text-slate-800' : 'text-slate-300'}`}
+                className={`flex h-14 flex-col items-center rounded-xl pt-1 ${isSel ? 'bg-accent text-accent-ink' : inMonth ? 'text-ink' : 'text-ghost'}`}
               >
-                <span className={`flex h-6 w-6 items-center justify-center rounded-full text-sm ${isToday && !isSel ? 'bg-slate-200 font-bold' : ''} ${!isSel && inMonth ? (wd === 0 ? 'text-rose-500' : wd === 6 ? 'text-sky-600' : '') : ''}`}>
+                <span className={`flex h-6 w-6 items-center justify-center rounded-full text-sm ${isToday && !isSel ? 'bg-line font-bold' : ''} ${!isSel && inMonth ? (wd === 0 ? 'text-rose-500' : wd === 6 ? 'text-sky-600' : '') : ''}`}>
                   {Number(d.slice(8))}
                 </span>
                 <span className="mt-0.5 flex gap-0.5">
-                  {list?.slice(0, 4).map((c) => (
-                    <i key={c.id} className={`h-1.5 w-1.5 rounded-full ${isSel ? 'bg-white' : hasTime(c.due_at!) ? 'bg-sky-500' : 'bg-amber-500'}`} />
+                  {list?.slice(0, 3).map((c) => (
+                    <i key={c.id} className={`h-1.5 w-1.5 rounded-full ${isSel ? 'bg-surface' : hasTime(c.due_at!) ? 'bg-sky-500' : 'bg-amber-500'}`} />
                   ))}
+                  {/* 일기는 속을 비운 동그라미(일정 점과 구분). */}
+                  {hasDiary.has(d) && (
+                    <i className={`h-1.5 w-1.5 rounded-full border ${isSel ? 'border-surface' : 'border-emerald-500'}`} />
+                  )}
                 </span>
               </button>
             )
@@ -121,7 +124,6 @@ export default function Calendar() {
         </div>
       </div>
 
-      {/* 선택한 날 */}
       <section className="px-4 pt-4">
         <div className="flex items-center justify-between">
           <h2 className="text-base font-bold">{fmtDate(selected)}</h2>
@@ -130,12 +132,11 @@ export default function Calendar() {
         <ul className="mt-2 space-y-2">
           {sel.map((c) => (
             <li key={c.id}>
-              {/* 카드이므로 상세 페이지가 그대로 열린다 */}
-              <button onClick={() => nav(`/cards/${c.id}`)} className="flex w-full items-center gap-3 rounded-xl bg-white p-3 text-left shadow-sm active:bg-slate-50">
+              <button onClick={() => nav(`/cards/${c.id}`)} className="flex w-full items-center gap-3 rounded-2xl bg-surface p-3 text-left shadow-sm active:bg-canvas">
                 <span className={`h-8 w-1 shrink-0 rounded-full ${hasTime(c.due_at!) ? 'bg-sky-500' : 'bg-amber-500'}`} />
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm font-medium">{c.title}</p>
-                  <p className="text-xs text-slate-400">
+                  <p className="text-xs text-faint">
                     {hasTime(c.due_at!) ? `${ampm(c.due_at!)} ${fmtTime(c.due_at!)}` : '종일'}
                     {c.end_at && c.end_at.slice(0, 10) !== c.due_at!.slice(0, 10) && ` – ${c.end_at.slice(5, 10).replace('-', '/')}`}
                   </p>
@@ -146,8 +147,10 @@ export default function Calendar() {
             </li>
           ))}
           {cal.isPending && <li><SkeletonList rows={2} /></li>}
-          {!cal.isPending && sel.length === 0 && <li className="py-6 text-center text-sm text-slate-400">일정이 없어요</li>}
+          {!cal.isPending && sel.length === 0 && <li className="py-6 text-center text-sm text-faint">일정이 없어요</li>}
         </ul>
+
+        <DiaryOfDay date={selected} />
       </section>
 
       <Sheet open={adding} onClose={() => setAdding(false)} title={`${fmtDate(selected)}에 추가`}>
@@ -169,7 +172,6 @@ export default function Calendar() {
   )
 }
 
-// 캘린더에서 만드는 것도 카드다. 제목과 날짜만 받고 나머지는 카드 페이지에서.
 function AddForm({ date, boardName, onSubmit, onClose }: {
   date: string
   boardName?: string
@@ -204,7 +206,7 @@ function AddForm({ date, boardName, onSubmit, onClose }: {
       <Field label="끝 (여러 날에 걸칠 때만)">
         <Input type={timed ? 'datetime-local' : 'date'} value={end} min={due} onChange={(e) => setEnd(e.target.value)} />
       </Field>
-      {boardName && <p className="text-xs text-slate-400">보드 “{boardName}”의 첫 컬럼에 추가돼요 — 칸반에서도 보입니다.</p>}
+      {boardName && <p className="text-xs text-faint">보드 “{boardName}”의 첫 컬럼에 추가돼요 — 칸반에서도 보입니다.</p>}
       <div className="flex justify-end gap-2 pt-1">
         <Button type="button" variant="ghost" onClick={onClose}>취소</Button>
         <Button type="submit" disabled={!title.trim() || !due || busy}>{busy ? '여는 중…' : '추가하고 열기'}</Button>
@@ -217,4 +219,49 @@ function AddForm({ date, boardName, onSubmit, onClose }: {
 function nextHour(plus = 0) {
   const h = (new Date().getHours() + 1 + plus) % 24
   return `${h < 10 ? '0' : ''}${h}:00`
+}
+
+/** 그 날의 일기(다이어리 탭과 같은 글). */
+function DiaryOfDay({ date }: { date: string }) {
+  const nav = useNavigate()
+  const viewer = useDiaryViewer()
+  const list = useDiary(date, date)
+  const entries = list.data ?? []
+
+  return (
+    <div className="mt-4">
+      <div className="flex items-center justify-between">
+        <h3 className="text-sm font-bold text-ink-2">일기</h3>
+        <button
+          onClick={() => nav(`/diary/new?date=${date}`)}
+          className="text-xs font-medium text-muted"
+        >
+          + 쓰기
+        </button>
+      </div>
+      {entries.length === 0 ? (
+        <p className="py-3 text-center text-xs text-faint">이 날 쓴 일기가 없어요</p>
+      ) : (
+        <ul className="mt-2 space-y-1.5">
+          {entries.map((e) => (
+            <li key={e.id}>
+              <button
+                onClick={() => viewer.open(e.id)}
+                className="w-full rounded-2xl bg-surface p-3 text-left shadow-sm active:bg-canvas"
+              >
+                <div className="flex gap-3">
+                  <div className="min-w-0 flex-1">
+                    {e.title && <p className="truncate text-sm font-semibold">{e.title}</p>}
+                    {e.plain && <p className={`line-clamp-2 text-xs text-muted ${e.title ? 'mt-0.5' : ''}`}>{e.plain}</p>}
+                    {!e.title && !e.plain && <p className="text-xs text-faint">빈 일기</p>}
+                  </div>
+                  {e.photos[0] && <img src={e.photos[0]} alt="" loading="lazy" className="h-12 w-12 shrink-0 rounded-lg object-cover" />}
+                </div>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  )
 }
