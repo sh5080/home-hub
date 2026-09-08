@@ -9,13 +9,22 @@ import (
 	"github.com/sh5080/home-hub/planner/internal/store"
 )
 
-// cmdMigrate: planner migrate status [--data DIR]
-//
-// `serve` applies pending migrations on startup; this only inspects. It's the
-// thing to run before a deploy you're unsure about, and after one that failed.
+// planner migrate status — 적용 없이 확인만(적용은 serve 가 한다).
+// planner migrate accept NAME — 적용된 파일의 주석만 고쳤을 때 기록된 체크섬을 맞춘다.
 func cmdMigrate(args []string) error {
+	if len(args) >= 2 && args[0] == "accept" {
+		fs := flag.NewFlagSet("migrate accept", flag.ExitOnError)
+		data := dataFlag(fs)
+		fs.Parse(args[2:])
+		old, now, err := store.AcceptChecksum(*data, args[1])
+		if err != nil {
+			return err
+		}
+		fmt.Printf("%s: %s → %s\n", args[1], old[:8], now[:8])
+		return nil
+	}
 	if len(args) < 1 || args[0] != "status" {
-		return errors.New("usage: planner migrate status [--data DIR]")
+		return errors.New("usage: planner migrate status|accept NAME [--data DIR]")
 	}
 	fs := flag.NewFlagSet("migrate status", flag.ExitOnError)
 	data := dataFlag(fs)
