@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router'
-import { useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   DndContext, DragOverlay, PointerSensor, useSensor, useSensors, useDroppable,
   pointerWithin, rectIntersection, getFirstCollision,
@@ -8,6 +8,7 @@ import {
 } from '@dnd-kit/core'
 import { SortableContext, useSortable, verticalListSortingStrategy, arrayMove } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
+import { useConfirm } from '../components/Confirm'
 import { api, type BoardDetail, type Card, type Column } from '../api'
 import { useBoard, useBoards, useInvalidating, useUsers } from '../lib/hooks'
 import { fmtDue, today } from '../lib/date'
@@ -17,27 +18,29 @@ import type { SortMode, SortOrder } from '../lib/hooks'
 import { sortCards } from '../lib/sortCards'
 import { useScrollFade } from '../lib/useScrollFade'
 
-// 손가락(포인터)이 실제로 어느 영역 안에 있는지로 판정한다.
-// closestCorners는 끌고 있는 카드의 모서리와 후보들의 거리를 재는데, 컬럼이
-// 세로로 같은 높이라 손가락이 왼쪽 컬럼 위에 있어도 다른 컬럼이 더 가깝게
-// 계산되는 일이 생긴다. pointerWithin이 이 배치에 맞다.
-// 포인터가 어느 영역에도 안 걸칠 때(컬럼 사이 여백)만 사각형 교차로 떨어진다.
+// 포인터가 실제로 들어 있는 영역으로 판정한다(closestCorners 는 같은 높이 칸에서 옆 칸을 고른다).
+// 여백에 있을 때만 사각형 교차로.
 const collisionDetection: CollisionDetection = (args) => {
   const pointer = pointerWithin(args)
+  // 보관 칸은 완료 칸 안에 있어 둘 다 걸린다 — 보관 칸 우선.
+  const archive = pointer.find((c) => c.id === ARCHIVE_ZONE)
+  if (archive) return [archive]
   if (getFirstCollision(pointer)) return pointer
   return rectIntersection(args)
 }
+
+const ARCHIVE_ZONE = 'archive-zone'
 
 const LAST_BOARD_KEY = 'planner.lastBoard'
 const VIEW_KEY = 'planner.boardView'
 const SORT_KEY = 'planner.boardSort'
 const COLORDER_KEY = 'planner.columnOrder'
 
-/** 컬럼별 정렬 방향. 기준(시간/중요도/수동)은 보드 전체가 하나로 쓴다. */
+/** 칸별 정렬 방향. 기준은 보드 전체가 하나. */
 type ColOrder = Record<number, SortOrder>
 type View = 'kanban' | 'backlog'
 
-// 할 일 탭은 목록이 아니라 바로 칸반/백로그다. /boards 는 마지막에 본 보드(없으면 첫 보드).
+// /boards 는 마지막에 본 보드(없으면 첫 보드).
 export default function Board() {
   const params = useParams()
   const nav = useNavigate()
@@ -64,7 +67,7 @@ function NoBoards() {
     <div className="mx-auto max-w-lg">
       <PageHeader title="할 일" />
       <div className="p-6 text-center">
-        <p className="text-slate-400">보드가 없어요</p>
+        <p className="text-faint">보드가 없어요</p>
         <Button className="mt-4" onClick={() => create.mutate('할 일')}>할 일 보드 만들기</Button>
       </div>
     </div>
@@ -72,15 +75,17 @@ function NoBoards() {
 }
 
 function Kanban({ id, onSwitch }: { id: number; onSwitch: (id: number) => void }) {
+  const confirm = useConfirm()
   const qc = useQueryClient()
   const boards = useBoards()
-  // 기본은 시간순이다. 마감이 있는 일이 대부분이라 그게 먼저 보여야 한다.
-  // 직접 정한 순서로 보려면 '수동'으로 바꾼다.
   const [sort, setSortState] = useState<SortMode>(() => {
-    try { return (localStorage.getItem(SORT_KEY) as SortMode) || 'time' } catch { return 'time' }
+    try {
+      const v = localStorage.getItem(SORT_KEY)
+      // 예전 '수동' 설정은 시간순으로.
+      return v === 'time' || v === 'priority' ? v : 'time'
+    } catch { return 'time' }
   })
   const setSort = (m: SortMode) => { setSortState(m); try { localStorage.setItem(SORT_KEY, m) } catch { /* ignore */ } }
-  // 방향은 컬럼마다 다르다 — 할 일은 마감 가까운 순, 완료는 최근 순처럼.
   const [colOrder, setColOrderState] = useState<ColOrder>(() => {
     try { return JSON.parse(localStorage.getItem(COLORDER_KEY) || '{}') } catch { return {} }
   })
@@ -96,9 +101,9 @@ function Kanban({ id, onSwitch }: { id: number; onSwitch: (id: number) => void }
   const [adding, setAdding] = useState<Column | null>(null)
   const [menu, setMenu] = useState(false)
   const [switcher, setSwitcher] = useState(false)
+  const [archiveOpen, setArchiveOpen] = useState(false)
   const [dragging, setDragging] = useState<Card | null>(null)
-  // 펼친 컬럼. null이면 균등 분할. 좁은 화면에서 3분할은 카드가 답답해서
-  // 한 컬럼만 크게 보는 모드를 둔다.
+  // 펼친 칸. null 이면 균등 분할.
   const [expanded, setExpanded] = useState<number | null>(null)
   const [view, setViewState] = useState<View>(() => {
     try { return (localStorage.getItem(VIEW_KEY) as View) || 'kanban' } catch { return 'kanban' }
@@ -113,14 +118,12 @@ function Kanban({ id, onSwitch }: { id: number; onSwitch: (id: number) => void }
   const delBoard = useInvalidating(() => api.del(`/api/boards/${id}`), [['boards'], ['today']])
   const createBoard = useInvalidating((n: string) => api.post<{ id: number }>('/api/boards', { name: n }), [['boards']])
 
-  // 드래그는 카드 오른쪽 그립에서만 시작한다(그립은 touch-action:none). 카드 본문은 스크롤/탭.
-  // 길게 누르기 방식은 iOS에서 홀드 중 미세한 touchmove가 스크롤로 확정돼 드롭이 튀었다.
+  // 드래그는 그립에서만 시작한다(touch-action:none). 길게 누르기는 iOS 에서 미세 touchmove 가 스크롤로 확정돼 드롭이 튄다.
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }))
 
   if (board.isPending) return <div className="p-4"><SkeletonList rows={5} /></div>
   if (board.isError || !board.data) return <div className="p-6 text-rose-500">보드를 불러올 수 없어요</div>
 
-  // 기준은 보드 전체가 하나, 방향만 컬럼별.
   const orderOf = (colID: number): SortOrder => colOrder[colID] ?? 'asc'
   const columns = board.data.columns.map((c) => ({ ...c, cards: sortCards(c.cards, sort, orderOf(c.id)) }))
   const userName = (uid: number | null) => users.data?.find((u) => u.id === uid)?.name
@@ -147,7 +150,20 @@ function Kanban({ id, onSwitch }: { id: number; onSwitch: (id: number) => void }
     const src = findCard(cardId)
     if (!src) return
 
-    // over는 카드('card-N')거나 컬럼('col-N')
+    // 완료 칸 아래 '보관하기' 칸에 떨어뜨리면 보관한다.
+    if (String(over.id) === ARCHIVE_ZONE) {
+      if (src.col.id !== columns[columns.length - 1]?.id) return
+      qc.setQueryData<BoardDetail>(['board', id], (old) => old && {
+        ...old,
+        columns: old.columns.map((c) => (c.id === src.col.id ? { ...c, cards: c.cards.filter((x) => x.id !== cardId) } : c)),
+      })
+      api.post(`/api/cards/${cardId}/archive`)
+        .catch(() => { /* 실패하면 다시 불러와 되돌린다 */ })
+        .finally(() => { qc.invalidateQueries({ queryKey: ['board', id] }); qc.invalidateQueries({ queryKey: ['archive'] }) })
+      return
+    }
+
+    // over 는 'card-N' 이거나 'col-N'
     let toCol: Column | undefined
     let toIndex: number
     const overId = String(over.id)
@@ -162,12 +178,11 @@ function Kanban({ id, onSwitch }: { id: number; onSwitch: (id: number) => void }
     }
     if (!toCol) return
     if (toCol.id === src.col.id) {
-      // 정렬이 켜진 컬럼에서는 순서를 바꿔도 다시 정렬돼 남지 않는다 — 무시.
+      // 정렬이 켜진 칸에서는 순서를 바꿔도 다시 정렬된다 — 무시.
       if (sort !== 'manual' || toIndex === src.index) return
     }
 
-    // 낙관적 갱신: 서버와 같은 splice 의미론으로 로컬 상태를 먼저 바꾼다.
-    // 같은 컬럼이면 arrayMove가 곧 최종 인덱스 = 서버의 newPos.
+    // 낙관적 갱신: 서버와 같은 splice 의미론(같은 칸이면 arrayMove 결과 = 서버 newPos).
     qc.setQueryData<BoardDetail>(['board', id], (old) => {
       if (!old) return old
       const cols = old.columns.map((c) => ({ ...c, cards: [...c.cards] }))
@@ -190,38 +205,32 @@ function Kanban({ id, onSwitch }: { id: number; onSwitch: (id: number) => void }
         title={
           <button onClick={() => setSwitcher(true)} className="flex items-center gap-1 text-left">
             <span className="truncate">{board.data.board.name}</span>
-            {many && <svg viewBox="0 0 24 24" className="h-4 w-4 shrink-0 text-slate-400" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M6 9l6 6 6-6" /></svg>}
+            {many && <svg viewBox="0 0 24 24" className="h-4 w-4 shrink-0 text-faint" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M6 9l6 6 6-6" /></svg>}
           </button>
         }
         right={
-          <button onClick={() => setMenu(true)} aria-label="메뉴" className="rounded-lg p-1 text-slate-500 active:bg-slate-200">
+          <button onClick={() => setMenu(true)} aria-label="메뉴" className="rounded-lg p-1 text-muted active:bg-line">
             <svg viewBox="0 0 24 24" className="h-6 w-6" fill="currentColor"><circle cx="5" cy="12" r="2" /><circle cx="12" cy="12" r="2" /><circle cx="19" cy="12" r="2" /></svg>
           </button>
         }
       />
 
-      {/* 칸반 / 백로그 + 정렬 */}
-      <div className="flex items-center gap-2 px-4 pt-2">
-        <div className="flex flex-1 rounded-xl bg-slate-200 p-0.5 text-sm font-medium">
-          {(['kanban', 'backlog'] as const).map((v) => (
-            <button
-              key={v}
-              onClick={() => setView(v)}
-              className={`flex-1 rounded-[10px] py-1.5 transition ${view === v ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500'}`}
-            >
-              {v === 'kanban' ? '칸반' : '백로그'}
-            </button>
-          ))}
-        </div>
+      <div className="flex items-center gap-1.5 px-4 pt-2">
+        <div className="flex-1" />
+        <button
+          onClick={() => setView(view === 'kanban' ? 'backlog' : 'kanban')}
+          className="flex shrink-0 items-center gap-1 rounded-lg bg-line px-2 py-1.5 text-xs font-medium text-ink-2 active:bg-ghost"
+        >
+          <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 text-muted" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M4 7h13l-3-3M20 17H7l3 3" />
+          </svg>
+          {view === 'kanban' ? '칸반' : '백로그'}
+        </button>
         <SortToggle value={sort} onChange={setSort} />
       </div>
-      {sort !== 'manual' && (
-        <p className="px-4 pt-1.5 text-[11px] text-slate-400">정렬 중에는 카드를 끌어 순서를 바꿀 수 없어요 · 수동으로 바꾸면 가능</p>
-      )}
 
       {view === 'kanban' ? (
         <DndContext sensors={sensors} collisionDetection={collisionDetection} onDragStart={onDragStart} onDragEnd={onDragEnd} onDragCancel={() => setDragging(null)}>
-          {/* 컬럼을 한 화면에 나란히. 3개면 3분할, 5개 이상이면 가로 스크롤. */}
           <div className="no-scrollbar flex flex-1 gap-2 overflow-x-auto px-2 py-3">
             {columns.map((col) => (
               <ColumnView
@@ -236,6 +245,9 @@ function Kanban({ id, onSwitch }: { id: number; onSwitch: (id: number) => void }
                 userName={userName}
                 onAdd={() => setAdding(col)}
                 onOpen={(c) => nav(`/cards/${c.id}`)}
+                onArchive={col.id === columns[columns.length - 1]?.id ? () => setArchiveOpen(true) : undefined}
+                // 완료 칸의 카드를 끄는 동안에만 '보관하기' 칸이 뜬다.
+                archiveDrop={col.id === columns[columns.length - 1]?.id && dragging?.column_id === col.id}
               />
             ))}
           </div>
@@ -247,7 +259,7 @@ function Kanban({ id, onSwitch }: { id: number; onSwitch: (id: number) => void }
         <Backlog columns={columns} userName={userName} onAdd={() => setAdding(columns[0])} onOpen={(c) => nav(`/cards/${c.id}`)} />
       )}
 
-      {/* 카드 추가: 제목만 받고 바로 상세 페이지로 — 나머지는 거기서 채운다 */}
+      {/* 카드 추가: 제목만 받고 상세로. */}
       <Sheet open={!!adding} onClose={() => setAdding(null)} title={adding ? `${adding.name}에 추가` : ''}>
         {adding && <QuickAdd colName={adding.name} onSubmit={async (title) => {
           const c = await addCard.mutateAsync({ col: adding.id, title })
@@ -256,17 +268,16 @@ function Kanban({ id, onSwitch }: { id: number; onSwitch: (id: number) => void }
         }} onClose={() => setAdding(null)} />}
       </Sheet>
 
-      {/* 보드 전환 */}
       <Sheet open={switcher} onClose={() => setSwitcher(false)} title="보드">
         <ul className="space-y-1">
           {boards.data?.map((b) => (
             <li key={b.id}>
               <button
                 onClick={() => { onSwitch(b.id); setSwitcher(false) }}
-                className={`flex w-full items-center justify-between rounded-xl px-4 py-3 text-left ${b.id === id ? 'bg-slate-900 text-white' : 'bg-slate-100'}`}
+                className={`flex w-full items-center justify-between rounded-xl px-4 py-3 text-left ${b.id === id ? 'bg-accent text-accent-ink' : 'bg-surface-2'}`}
               >
                 <span className="font-medium">{b.name}</span>
-                <span className={`text-xs ${b.id === id ? 'text-slate-300' : 'text-slate-400'}`}>{b.card_count ?? 0}개</span>
+                <span className={`text-xs ${b.id === id ? 'text-ghost' : 'text-faint'}`}>{b.card_count ?? 0}개</span>
               </button>
             </li>
           ))}
@@ -286,13 +297,14 @@ function Kanban({ id, onSwitch }: { id: number; onSwitch: (id: number) => void }
         </Button>
       </Sheet>
 
-      {/* 보드 메뉴 */}
+      <ArchiveSheet boardID={id} open={archiveOpen} onClose={() => setArchiveOpen(false)} userName={userName} onOpen={(cid) => { setArchiveOpen(false); nav(`/cards/${cid}`) }} />
+
       <Sheet open={menu} onClose={() => setMenu(false)} title={board.data.board.name}>
         <div className="space-y-2">
           <Button variant="ghost" className="w-full" onClick={() => { const n = prompt('컬럼 이름'); if (n?.trim()) addColumn.mutate(n.trim()); setMenu(false) }}>+ 컬럼 추가</Button>
           <Button variant="ghost" className="w-full" onClick={() => { const n = prompt('보드 이름', board.data!.board.name); if (n?.trim()) renameBoard.mutate(n.trim()); setMenu(false) }}>이름 바꾸기</Button>
-          <Button variant="danger" className="w-full" onClick={() => {
-            if (confirm(`"${board.data!.board.name}" 보드와 모든 카드를 삭제할까요?`)) {
+          <Button variant="danger" className="w-full" onClick={async () => {
+            if (await confirm({ title: `"${board.data!.board.name}" 보드를 삭제할까요?`, body: '그 안의 카드가 전부 사라져요.', confirmLabel: '삭제', danger: true })) {
               delBoard.mutate(undefined)
               try { localStorage.removeItem(LAST_BOARD_KEY) } catch { /* ignore */ }
               setMenu(false)
@@ -305,8 +317,7 @@ function Kanban({ id, onSwitch }: { id: number; onSwitch: (id: number) => void }
   )
 }
 
-// 백로그: 보드의 카드를 세로 리스트로. 완료 컬럼은 접어둔다.
-// 정렬: 마감 지난 것 → 마감 있는 것(가까운 순) → 마감 없는 것(컬럼 순).
+// 백로그: 세로 리스트, 완료 칸은 접는다. 마감 지난 것 → 마감 가까운 순 → 마감 없음.
 function Backlog({ columns, userName, onAdd, onOpen }: { columns: Column[]; userName: (id: number | null) => string | undefined; onAdd: () => void; onOpen: (c: Card) => void }) {
   const last = columns[columns.length - 1]
   const open = columns.slice(0, -1).flatMap((col) => col.cards.map((c) => ({ c, col })))
@@ -319,12 +330,12 @@ function Backlog({ columns, userName, onAdd, onOpen }: { columns: Column[]; user
   const Row = ({ c, col, muted }: { c: Card; col: Column; muted?: boolean }) => {
     const name = c.assignee_id ? userName(c.assignee_id) : undefined
     return (
-      <button onClick={() => onOpen(c)} className={`flex w-full items-start gap-3 rounded-xl bg-white p-3 text-left shadow-sm active:bg-slate-50 ${muted ? 'opacity-60' : ''}`}>
+      <button onClick={() => onOpen(c)} className={`flex w-full items-start gap-3 rounded-xl bg-surface p-3 text-left shadow-sm active:bg-canvas ${muted ? 'opacity-60' : ''}`}>
         <div className="min-w-0 flex-1">
           <p className={`text-sm font-medium leading-snug ${muted ? 'line-through' : ''}`}>{c.title}</p>
-          {c.description && <p className="mt-0.5 truncate text-xs text-slate-400">{c.description}</p>}
+          {c.description && <p className="mt-0.5 truncate text-xs text-faint">{c.description}</p>}
           <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-            <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-500">{col.name}</span>
+            <span className="rounded bg-surface-2 px-1.5 py-0.5 text-[10px] font-medium text-muted">{col.name}</span>
             <Stars n={c.priority} />
             {c.due_at && <DueBadge due={c.due_at} />}
             {c.recur && <RecurBadge label={c.recur_label} />}
@@ -339,11 +350,11 @@ function Backlog({ columns, userName, onAdd, onOpen }: { columns: Column[]; user
       <Button variant="ghost" className="mb-3 w-full" onClick={onAdd}>+ 할 일 추가</Button>
       <ul className="space-y-2">
         {open.map(({ c, col }) => <li key={c.id}><Row c={c} col={col} /></li>)}
-        {open.length === 0 && <li className="py-8 text-center text-sm text-slate-400">남은 할 일이 없어요</li>}
+        {open.length === 0 && <li className="py-8 text-center text-sm text-faint">남은 할 일이 없어요</li>}
       </ul>
       {done.length > 0 && (
         <details className="mt-4">
-          <summary className="cursor-pointer text-xs font-medium text-slate-400">{last.name} {done.length}</summary>
+          <summary className="cursor-pointer text-xs font-medium text-faint">{last.name} {done.length}</summary>
           <ul className="mt-2 space-y-2">
             {done.map(({ c, col }) => <li key={c.id}><Row c={c} col={col} muted /></li>)}
           </ul>
@@ -353,8 +364,11 @@ function Backlog({ columns, userName, onAdd, onOpen }: { columns: Column[]; user
   )
 }
 
-function ColumnView({ col, narrow, collapsed, expanded, onToggleExpand, userName, onAdd, onOpen, order, onFlipOrder }: {
+function ColumnView({ col, narrow, collapsed, expanded, onToggleExpand, userName, onAdd, onOpen, order, onFlipOrder, onArchive, archiveDrop }: {
   col: Column
+  archiveDrop?: boolean
+  /** 완료 칸에만 — 보관함 열기 */
+  onArchive?: () => void
   narrow: boolean
   collapsed: boolean
   expanded: boolean
@@ -368,17 +382,16 @@ function ColumnView({ col, narrow, collapsed, expanded, onToggleExpand, userName
   const { setNodeRef, isOver } = useDroppable({ id: `col-${col.id}` })
   const fade = useScrollFade<HTMLUListElement>()
 
-  // 접힌 컬럼도 드롭 대상으로 남긴다 — 펼친 상태에서 옆 컬럼으로 카드를
-  // 끌어다 놓을 수 있어야 한다.
+  // 접힌 칸도 드롭 대상으로 남긴다.
   if (collapsed) {
     return (
       <button
         ref={setNodeRef}
         onClick={onToggleExpand}
-        className={`flex w-11 shrink-0 flex-col items-center gap-2 rounded-2xl py-3 transition-colors ${isOver ? 'bg-slate-300' : 'bg-slate-100'}`}
+        className={`flex w-11 shrink-0 flex-col items-center gap-2 rounded-2xl py-3 transition-colors ${isOver ? 'bg-line' : 'bg-surface-2'}`}
       >
-        <span className="rounded-full bg-white px-1.5 text-[11px] font-semibold text-slate-500">{col.cards.length}</span>
-        <span className="text-xs font-bold text-slate-600" style={{ writingMode: 'vertical-rl' }}>
+        <span className="rounded-full bg-surface px-1.5 text-[11px] font-semibold text-muted">{col.cards.length}</span>
+        <span className="text-xs font-bold text-ink-2" style={{ writingMode: 'vertical-rl' }}>
           {col.name}
         </span>
       </button>
@@ -389,22 +402,28 @@ function ColumnView({ col, narrow, collapsed, expanded, onToggleExpand, userName
   return (
     <section
       ref={setNodeRef}
-      className={`flex min-w-0 flex-col rounded-2xl transition-colors ${width} sm:min-w-56 ${isOver ? 'bg-slate-200' : 'bg-slate-100'}`}
+      className={`flex min-w-0 flex-col rounded-2xl transition-colors ${width} sm:min-w-56 ${isOver ? 'bg-line' : 'bg-surface-2'}`}
     >
       <div className="flex items-center gap-0.5 px-2.5 pt-2.5 pb-1.5">
-        {/* 헤더를 누르면 이 컬럼만 크게 — 다시 누르면 균등 분할로 */}
         <button onClick={onToggleExpand} className="flex min-w-0 flex-1 items-center gap-1 active:opacity-60">
-          <h2 className="truncate text-xs font-bold text-slate-700">{col.name}</h2>
-          <span className="shrink-0 text-[11px] text-slate-400">{col.cards.length}</span>
-          <svg viewBox="0 0 24 24" className="h-3 w-3 shrink-0 text-slate-400" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+          <h2 className="truncate text-xs font-bold text-ink-2">{col.name}</h2>
+          <span className="shrink-0 text-[11px] text-faint">{col.cards.length}</span>
+          <svg viewBox="0 0 24 24" className="h-3 w-3 shrink-0 text-faint" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
             {expanded ? <path d="M9 4v6H3M15 20v-6h6" /> : <path d="M4 9V3h6M20 15v6h-6" />}
           </svg>
         </button>
-        {/* 이 컬럼의 정렬 방향만 뒤집는다. 기준은 위 세그먼트가 정한다. */}
+        {onArchive && (
+          <button onClick={onArchive} aria-label="보관함" title="보관함"
+            className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-faint active:bg-line">
+            <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="3" y="4" width="18" height="5" rx="1" /><path d="M5 9v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V9M10 13h4" />
+            </svg>
+          </button>
+        )}
         <button
           onClick={onFlipOrder}
           aria-label={`${col.name} 정렬 방향 (${order === 'desc' ? '내림차순' : '오름차순'})`}
-          className={`flex h-5 w-5 shrink-0 items-center justify-center rounded ${order === 'desc' ? 'bg-slate-900 text-white' : 'text-slate-400 active:bg-slate-200'}`}
+          className={`flex h-5 w-5 shrink-0 items-center justify-center rounded ${order === 'desc' ? 'bg-accent text-accent-ink' : 'text-faint active:bg-line'}`}
         >
           <svg viewBox="0 0 24 24" className={`h-3 w-3 transition-transform ${order === 'desc' ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
             <path d="M12 5v14M6 11l6-6 6 6" />
@@ -419,7 +438,11 @@ function ColumnView({ col, narrow, collapsed, expanded, onToggleExpand, userName
           {col.cards.length === 0 && <li className="h-10" />}
         </ul>
       </SortableContext>
-      <button onClick={onAdd} className="m-1.5 rounded-lg py-1.5 text-[13px] font-medium text-slate-500 active:bg-white">+ 추가</button>
+      {archiveDrop ? (
+        <ArchiveDropZone />
+      ) : (
+        <button onClick={onAdd} className="m-1.5 rounded-lg py-1.5 text-[13px] font-medium text-muted active:bg-surface">+ 추가</button>
+      )}
     </section>
   )
 }
@@ -432,10 +455,7 @@ function SortableCard({ card, userName, onOpen, wide }: { card: Card; userName: 
       style={{
         transform: CSS.Transform.toString(transform),
         transition,
-        // 카드 전체를 끌 수 있게 하되 세로 스크롤은 브라우저에 남긴다.
-        // none 으로 막으면 컬럼 목록을 손가락으로 넘길 수 없고, 그대로 두면
-        // 가로로 끌 때 브라우저가 먼저 스크롤로 판정해 드롭이 엉킨다.
-        // pan-y 는 "세로는 브라우저, 가로는 앱" 이라는 뜻이다.
+        // pan-y: 세로 스크롤은 브라우저, 가로 끌기는 앱(none 이면 목록을 못 넘기고, 그대로면 드롭이 엉킨다).
         touchAction: 'pan-y',
       }}
       className={isDragging ? 'opacity-30' : ''}
@@ -448,13 +468,13 @@ function SortableCard({ card, userName, onOpen, wide }: { card: Card; userName: 
         wide={wide}
         onClick={() => onOpen(card)}
         grip={
-          // 세로 재정렬용 손잡이. 여기만 세로 제스처도 앱이 가져간다.
+          // 세로 재정렬 손잡이 — 여기만 세로 제스처도 앱이 가져간다.
           <button
             ref={setActivatorNodeRef}
             {...attributes}
             {...listeners}
             aria-label="끌어서 순서 바꾸기"
-            className="-my-2 -mr-2 flex w-7 shrink-0 cursor-grab items-center justify-center self-stretch rounded-r-lg text-slate-300 active:cursor-grabbing active:bg-slate-100"
+            className="-my-2 -mr-2 flex w-7 shrink-0 cursor-grab items-center justify-center self-stretch rounded-r-lg text-ghost active:cursor-grabbing active:bg-surface-2"
             style={{ touchAction: 'none' }}
           >
             <svg viewBox="0 0 24 24" className="h-4 w-4" fill="currentColor"><circle cx="9" cy="6" r="1.6" /><circle cx="15" cy="6" r="1.6" /><circle cx="9" cy="12" r="1.6" /><circle cx="15" cy="12" r="1.6" /><circle cx="9" cy="18" r="1.6" /><circle cx="15" cy="18" r="1.6" /></svg>
@@ -468,10 +488,10 @@ function SortableCard({ card, userName, onOpen, wide }: { card: Card; userName: 
 function CardTile({ card, userName, onClick, lifted, grip, wide }: { card: Card; userName: (id: number | null) => string | undefined; onClick?: () => void; lifted?: boolean; grip?: React.ReactNode; wide?: boolean }) {
   const name = card.assignee_id ? userName(card.assignee_id) : undefined
   return (
-    <div className={`flex w-full select-none rounded-lg bg-white p-2 ${lifted ? 'rotate-2 shadow-xl ring-2 ring-slate-900/10' : 'shadow-sm'}`}>
+    <div className={`flex w-full select-none rounded-lg bg-surface p-2 ${lifted ? 'rotate-2 shadow-xl ring-2 ring-accent/10' : 'shadow-sm'}`}>
       <button onClick={onClick} className="min-w-0 flex-1 text-left active:opacity-70">
         <p className={`font-medium leading-snug break-words ${wide ? 'text-sm' : 'text-[13px]'}`}>{card.title}</p>
-        {wide && card.description && <p className="mt-0.5 line-clamp-2 text-xs text-slate-400">{card.description}</p>}
+        {wide && card.description && <p className="mt-0.5 line-clamp-2 text-xs text-faint">{card.description}</p>}
         {(card.due_at || name || card.priority > 0 || card.recur) && (
           <div className="mt-1.5 flex flex-wrap items-center gap-1">
             <Stars n={card.priority} />
@@ -490,11 +510,10 @@ function DueBadge({ due }: { due: string }) {
   const day = due.slice(0, 10)
   const overdue = day < today()
   const isToday = day === today()
-  const cls = overdue ? 'bg-rose-100 text-rose-600' : isToday ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-500'
+  const cls = overdue ? 'bg-rose-100 text-rose-600' : isToday ? 'bg-amber-100 text-amber-700' : 'bg-surface-2 text-muted'
   return <span className={`rounded px-1 py-0.5 text-[10px] font-medium ${cls}`}>{fmtDue(due)}</span>
 }
 
-// 제목만 받는 빠른 추가. 상세는 카드 페이지에서 채운다.
 function QuickAdd({ colName, onSubmit, onClose }: { colName: string; onSubmit: (title: string) => void; onClose: () => void }) {
   const [title, setTitle] = useState('')
   const [busy, setBusy] = useState(false)
@@ -512,15 +531,81 @@ function QuickAdd({ colName, onSubmit, onClose }: { colName: string; onSubmit: (
   )
 }
 
-/** 반복 카드 표시. 완료하면 다음 회차가 자동으로 생긴다는 신호다. */
+/** 반복 카드 표시. */
 function RecurBadge({ label }: { label: string }) {
   return (
-    <span className="inline-flex shrink-0 items-center gap-0.5 rounded-md bg-slate-100 px-1.5 py-0.5 text-[11px] text-slate-500">
+    <span className="inline-flex shrink-0 items-center gap-0.5 rounded-md bg-surface-2 px-1.5 py-0.5 text-[11px] text-muted">
       <svg viewBox="0 0 24 24" className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
         <path d="M17 2l4 4-4 4" /><path d="M3 11V9a4 4 0 0 1 4-4h14" />
         <path d="M7 22l-4-4 4-4" /><path d="M21 13v2a4 4 0 0 1-4 4H3" />
       </svg>
       {label}
     </span>
+  )
+}
+
+/** 보관함: 완료 한 달 지난 카드(최근 완료순). 다른 칸으로 옮기면 보드로 돌아온다. */
+function ArchiveSheet({ boardID, open, onClose, userName, onOpen }: {
+  boardID: number
+  open: boolean
+  onClose: () => void
+  userName: (id: number | null) => string | undefined
+  onOpen: (id: number) => void
+}) {
+  const [q, setQ] = useState('')
+  const [debounced, setDebounced] = useState('')
+  useEffect(() => { const t = window.setTimeout(() => setDebounced(q.trim()), 250); return () => window.clearTimeout(t) }, [q])
+  const list = useQuery({
+    queryKey: ['archive', boardID, debounced],
+    queryFn: () => api.get<Card[]>(`/api/boards/${boardID}/archive${debounced ? `?q=${encodeURIComponent(debounced)}` : ''}`),
+    enabled: open,
+  })
+  const doneDate = (c: Card) => {
+    const t = c.done_at ?? c.updated_at
+    const d = new Date(t * 1000)
+    return `${d.getFullYear() !== new Date().getFullYear() ? `${d.getFullYear()}.` : ''}${d.getMonth() + 1}.${d.getDate()}`
+  }
+  return (
+    <Sheet open={open} onClose={onClose} title="보관함">
+      <p className="-mt-2 mb-2 text-[11px] text-faint">완료한 지 한 달 지난 카드예요. 상태를 바꾸면 다시 보드로 돌아가요.</p>
+      <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="제목·본문에서 찾기" />
+      <ul className="mt-2 max-h-[55dvh] divide-y divide-line overflow-y-auto">
+        {list.isPending && <li className="py-2"><SkeletonList rows={3} /></li>}
+        {list.data?.length === 0 && (
+          <li className="py-8 text-center text-sm text-faint">{debounced ? `“${debounced}” 에 맞는 게 없어요` : '보관된 카드가 없어요'}</li>
+        )}
+        {list.data?.map((c) => (
+          <li key={c.id}>
+            <button onClick={() => onOpen(c.id)} className="flex w-full items-center gap-2 py-2.5 text-left active:bg-surface-2">
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm font-medium">{c.title}</p>
+                {c.description && <p className="truncate text-xs text-faint">{c.description}</p>}
+              </div>
+              {c.priority > 0 && <Stars n={c.priority} />}
+              {c.assignee_id && userName(c.assignee_id) && <Avatar name={userName(c.assignee_id)!} />}
+              <span className="w-12 shrink-0 text-right text-[11px] tabular-nums text-faint">{doneDate(c)}</span>
+            </button>
+          </li>
+        ))}
+      </ul>
+    </Sheet>
+  )
+}
+
+/** 완료 칸 카드를 끌 때 아래 절반에 뜨는 점선 칸. 여기 놓으면 보관. */
+function ArchiveDropZone() {
+  const { setNodeRef, isOver } = useDroppable({ id: ARCHIVE_ZONE })
+  return (
+    <div
+      ref={setNodeRef}
+      className={`m-1.5 flex min-h-24 shrink-0 basis-1/2 flex-col items-center justify-center gap-1.5 rounded-xl border-2 border-dashed text-[13px] font-medium transition-colors ${
+        isOver ? 'border-ink-2 bg-surface text-ink' : 'border-ghost text-muted'
+      }`}
+    >
+      <svg viewBox="0 0 24 24" className="h-6 w-6" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <rect x="3" y="4" width="18" height="5" rx="1" /><path d="M5 9v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V9M10 13h4" />
+      </svg>
+      {isOver ? '놓으면 보관' : '보관하기'}
+    </div>
   )
 }

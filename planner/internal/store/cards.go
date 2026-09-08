@@ -8,8 +8,7 @@ import (
 	"time"
 )
 
-// CardInput is what the API accepts for create/patch. Pointer fields are
-// "not provided" when nil, so a PATCH only touches what it names.
+// CardInput 은 생성·수정 입력. nil 필드는 건드리지 않는다.
 type CardInput struct {
 	Title      *string
 	Content    *string // 블록 문서 JSON. description은 여기서 파생한다.
@@ -21,8 +20,7 @@ type CardInput struct {
 	Priority   *int    // 0=없음, 1~3
 }
 
-// validDue는 마감 문자열을 받는다. 날짜만이면 "그날 언제든", 시각이 있으면
-// 그 시각이다. 사전식 비교가 둘 다에서 시간순이라 범위 쿼리는 동일하다.
+// validDue 는 'YYYY-MM-DD' 또는 'YYYY-MM-DDTHH:MM'. 사전식 비교가 시간순이다.
 func validDue(s string) bool { return validDate(s) || validDateTime(s) }
 
 const maxPriority = 3
@@ -126,8 +124,7 @@ func (s *Store) CreateCard(ctx context.Context, columnID int64, in CardInput, by
 
 // UpdateCard patches the named fields.
 func (s *Store) UpdateCard(ctx context.Context, id int64, in CardInput) (Card, error) {
-	// 반복 규칙의 값은 마감에서 끌어온다. 같이 바뀌는 마감이 있으면 그걸,
-	// 없으면 지금 저장된 마감을 기준으로 한다.
+	// 반복 규칙 값은 마감에서 끌어온다(바뀌는 마감이 있으면 그것, 없으면 저장된 것).
 	dueForRecur := ""
 	if in.Recur != nil && *in.Recur != "" {
 		if in.DueAt != nil {
@@ -239,9 +236,9 @@ func (s *Store) UpdateCard(ctx context.Context, id int64, in CardInput) (Card, e
 func (s *Store) GetCard(ctx context.Context, id int64) (Card, error) {
 	var c Card
 	err := s.db.QueryRowContext(ctx, `
-		SELECT id, column_id, title, description, content, position, due_at, end_at, priority, assignee_id, created_by, created_at, updated_at, recur, recur_until, recur_parent_id
+		SELECT id, column_id, title, description, content, position, due_at, end_at, priority, assignee_id, created_by, created_at, updated_at, recur, recur_until, recur_parent_id, done_at, archived_at
 		FROM cards WHERE id=?`, id).
-		Scan(&c.ID, &c.ColumnID, &c.Title, &c.Description, &c.Content, &c.Position, &c.DueAt, &c.EndAt, &c.Priority, &c.AssigneeID, &c.CreatedBy, &c.CreatedAt, &c.UpdatedAt, &c.Recur, &c.RecurUntil, &c.RecurParentID)
+		Scan(&c.ID, &c.ColumnID, &c.Title, &c.Description, &c.Content, &c.Position, &c.DueAt, &c.EndAt, &c.Priority, &c.AssigneeID, &c.CreatedBy, &c.CreatedAt, &c.UpdatedAt, &c.Recur, &c.RecurUntil, &c.RecurParentID, &c.DoneAt, &c.ArchivedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Card{}, ErrNotFound
 	}
@@ -249,8 +246,7 @@ func (s *Store) GetCard(ctx context.Context, id int64) (Card, error) {
 	return c, err
 }
 
-// CardDetail은 카드 상세 페이지가 한 번에 필요한 것 — 카드, 속한 보드,
-// 그리고 상태(컬럼) 선택지. 컬럼에는 카드를 싣지 않는다(페이지가 안 쓴다).
+// CardDetail 은 카드 상세용 — 카드, 보드, 상태(칸) 선택지. 칸에는 카드를 싣지 않는다.
 type CardDetail struct {
 	Card    Card     `json:"card"`
 	Board   Board    `json:"board"`
@@ -296,14 +292,8 @@ func (s *Store) GetCardDetail(ctx context.Context, id int64) (CardDetail, error)
 	return d, rows.Err()
 }
 
-// MoveCard places card id at index newPos in column toColumn using splice
-// semantics: remove from the source list (closing the gap), then insert into
-// the destination list (opening a gap). Works for same-column moves in either
-// direction because the removal compacts first. newPos is clamped to
-// [0, len(dest)].
-//
-// Three UPDATEs; O(n) on a column's cards, which is tiny. No fractional or
-// gapped positions to renumber later.
+// MoveCard 는 splice 의미론으로 옮긴다: 원래 칸에서 빼 간격을 닫고, 대상 칸에 끼운다.
+// newPos 는 [0, len(dest)] 로 자른다.
 func (s *Store) MoveCard(ctx context.Context, id, toColumn int64, newPos int) (Card, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -321,7 +311,6 @@ func (s *Store) MoveCard(ctx context.Context, id, toColumn int64, newPos int) (C
 		return Card{}, err
 	}
 
-	// Destination must exist and be on the same board — cards don't cross boards.
 	var sameBoard int
 	if err := tx.QueryRowContext(ctx, `
 		SELECT count(*) FROM columns a JOIN columns b ON a.board_id = b.board_id
@@ -354,7 +343,22 @@ func (s *Store) MoveCard(ctx context.Context, id, toColumn int64, newPos int) (C
 	if _, err := tx.ExecContext(ctx, `UPDATE cards SET column_id=?, position=?, updated_at=? WHERE id=?`, toColumn, newPos, time.Now().Unix(), id); err != nil {
 		return Card{}, err
 	}
-	// 완료 칸으로 옮겼고 반복 카드라면 다음 회차를 새 카드로 만든다.
+	// 완료 칸에 들어오면 done_at 을 적고, 나가면 지운다(보관도 풀린다).
+	if toColumn != fromColumn {
+		var last int64
+		if err := tx.QueryRowContext(ctx,
+			`SELECT c2.id FROM columns c1 JOIN columns c2 ON c2.board_id = c1.board_id
+			  WHERE c1.id=? ORDER BY c2.position DESC, c2.id DESC LIMIT 1`, toColumn).Scan(&last); err != nil {
+			return Card{}, err
+		}
+		if toColumn == last {
+			if _, err := tx.ExecContext(ctx, `UPDATE cards SET done_at=? WHERE id=?`, time.Now().Unix(), id); err != nil {
+				return Card{}, err
+			}
+		} else if _, err := tx.ExecContext(ctx, `UPDATE cards SET done_at=NULL, archived_at=NULL WHERE id=?`, id); err != nil {
+			return Card{}, err
+		}
+	}
 	if err := spawnNextOccurrence(ctx, tx, id, toColumn); err != nil {
 		return Card{}, err
 	}
@@ -364,12 +368,8 @@ func (s *Store) MoveCard(ctx context.Context, id, toColumn int64, newPos int) (C
 	return s.GetCard(ctx, id)
 }
 
-// spawnNextOccurrence는 완료된 반복 카드의 다음 회차를 첫 칸에 만든다.
-//
-// 완료한 카드를 되돌리지 않는 게 요점이다. 드래그해서 '완료'에 넣었는데 그게
-// 사라지고 '할 일'에 다시 나타나면, 사용자는 완료가 안 된 줄 안다. 완료한
-// 것은 완료 칸에 그대로 남기고(반복 규칙은 떼어낸다 — 그 카드는 이제 지나간
-// 한 회차다), 다음 회차를 새 행으로 만든다.
+// spawnNextOccurrence 는 완료된 반복 카드의 다음 회차를 첫 칸에 새 행으로 만든다.
+// 완료한 카드는 완료 칸에 그대로 두고 규칙만 뗀다.
 func spawnNextOccurrence(ctx context.Context, tx *sql.Tx, id, toColumn int64) error {
 	var boardID int64
 	var lastCol, firstCol int64
@@ -381,8 +381,7 @@ func spawnNextOccurrence(ctx context.Context, tx *sql.Tx, id, toColumn int64) er
 	if err != nil {
 		return err
 	}
-	// 칸이 하나뿐인 보드에서는 첫 칸이 곧 완료 칸이다. 그런 보드에서
-	// 반복을 돌리면 옮길 때마다 새 카드가 생기므로 아무것도 하지 않는다.
+	// 칸이 하나뿐이면 옮길 때마다 새 카드가 생기므로 아무것도 안 한다.
 	if toColumn != lastCol || lastCol == firstCol {
 		return nil
 	}
@@ -406,12 +405,10 @@ func spawnNextOccurrence(ctx context.Context, tx *sql.Tx, id, toColumn int64) er
 	if err != nil {
 		return err
 	}
-	// 종료일을 넘었으면 여기서 멈춘다. 반복 규칙만 떼어내고 끝.
 	if until != nil && next[:10] > *until {
 		_, err = tx.ExecContext(ctx, `UPDATE cards SET recur=NULL WHERE id=?`, id)
 		return err
 	}
-	// 여러 날 항목이면 길이를 유지한 채로 함께 민다.
 	var nextEnd *string
 	if end != nil {
 		if shifted, err := shiftEnd(*due, *end, next); err == nil {
@@ -431,7 +428,6 @@ func spawnNextOccurrence(ctx context.Context, tx *sql.Tx, id, toColumn int64) er
 		firstCol, title, desc, content, pos, next, nextEnd, priority, assignee, by, now, now, *recur, until, id); err != nil {
 		return err
 	}
-	// 완료한 카드는 이제 지나간 한 회차다 — 규칙을 떼어낸다.
 	_, err = tx.ExecContext(ctx, `UPDATE cards SET recur=NULL WHERE id=?`, id)
 	return err
 }
@@ -484,8 +480,7 @@ func (s *Store) DeleteCard(ctx context.Context, id int64) error {
 	return tx.Commit()
 }
 
-// CalendarCards returns cards whose date range overlaps [from, to).
-// 끝이 없으면 시작 하루짜리로 본다. 여러 날 항목이 창 중간에서 시작해도 잡힌다.
+// CalendarCards 는 [from, to) 와 겹치는 카드. end_at 이 없으면 하루짜리로 본다.
 func (s *Store) CalendarCards(ctx context.Context, from, to string) ([]Card, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, column_id, title, description, content, position, due_at, end_at, priority, assignee_id, created_by, created_at, updated_at, recur, recur_until, recur_parent_id
@@ -520,8 +515,7 @@ func validDateTime(s string) bool {
 	return err == nil && len(s) == 16
 }
 
-// TodoCard is a card in a board's first column, with what the home screen
-// needs to show it and to "complete" it (move to the board's last column).
+// TodoCard 는 첫 칸의 카드 + 완료 칸 id (홈에서 '완료' 처리용).
 type TodoCard struct {
 	Card
 	BoardID      int64  `json:"board_id"`
@@ -529,17 +523,7 @@ type TodoCard struct {
 	DoneColumnID int64  `json:"done_column_id"`
 }
 
-// TodoCards returns cards sitting in the first column (position 0) of every
-// board — the kanban convention for "to do" — ordered by due date first, then
-// board, then position. The last column (max position) is reported as the
-// completion target.
-// TodoCards는 첫 칸('할 일')에서 **오늘까지 해야 할 것**을 돌려준다.
-//
-// 칸 전체를 주면 다음 달 마감까지 섞여 들어온다. 홈은 5줄만 보여주므로 그
-// 목록이 길수록 정작 오늘 것이 잘려 나가고, 바로 아래 '앞으로 7일'에는 보이는
-// 모순이 생긴다. 경계를 나눈다 — 위는 오늘까지, 아래는 내일부터.
-//
-// 마감 없는 카드는 포함한다. 언제 할지 안 정했을 뿐 할 일인 건 맞다.
+// TodoCards 는 모든 보드의 첫 칸에서 오늘까지 마감인 카드(마감 없는 것 포함)를 준다.
 func (s *Store) TodoCards(ctx context.Context, date string, sortBy Sort, order Order) ([]TodoCard, error) {
 	if !validDue(date) {
 		return nil, invalid("날짜는 YYYY-MM-DD 형식이어야 해요")
@@ -548,8 +532,7 @@ func (s *Store) TodoCards(ctx context.Context, date string, sortBy Sort, order O
 	if err != nil {
 		return nil, invalid("날짜는 YYYY-MM-DD 형식이어야 해요")
 	}
-	// 사전식 비교라 '2026-09-24T13:00' < '2026-09-25' 는 참이고
-	// '2026-09-25T09:00' < '2026-09-25' 는 거짓이다. 시각이 붙어도 경계가 맞는다.
+	// 사전식 비교라 시각이 붙은 마감도 '< 내일' 경계가 맞다.
 	tomorrow := d.AddDate(0, 0, 1).Format("2006-01-02")
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT c.id, c.column_id, c.title, c.description, c.content, c.position, c.due_at, c.end_at, c.priority, c.assignee_id, c.created_by, c.created_at, c.updated_at, c.recur, c.recur_until, c.recur_parent_id,
@@ -578,8 +561,7 @@ func (s *Store) TodoCards(ctx context.Context, date string, sortBy Sort, order O
 	return out, rows.Err()
 }
 
-// validateRecurInput은 생성 시 반복 규칙을 검사한다. 마감 없는 반복은
-// 다음 회차를 계산할 기준이 없으므로 막는다.
+// validateRecurInput 은 반복 규칙을 검사한다. 마감 없는 반복은 막는다.
 func validateRecurInput(in CardInput, due *string) (recur, until *string, err error) {
 	if in.Recur != nil && *in.Recur != "" {
 		if due == nil {
@@ -601,7 +583,7 @@ func validateRecurInput(in CardInput, due *string) (recur, until *string, err er
 	return recur, until, nil
 }
 
-// fillRecurLabel은 화면에 쓸 설명을 채운다. 규칙 해석은 서버에만 둔다.
+// fillRecurLabel 은 화면용 설명을 채운다(규칙 해석은 서버에만).
 func fillRecurLabel(c *Card) {
 	if c.Recur != nil {
 		c.RecurLabel = RecurLabel(*c.Recur)

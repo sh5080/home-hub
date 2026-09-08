@@ -13,6 +13,9 @@ func (s *Server) registerBoards(m *http.ServeMux) {
 	m.HandleFunc("GET /api/boards", s.listBoards)
 	m.HandleFunc("POST /api/boards", s.createBoard)
 	m.HandleFunc("GET /api/boards/{id}", s.getBoard)
+	m.HandleFunc("GET /api/boards/{id}/archive", s.boardArchive)
+	m.HandleFunc("POST /api/cards/{id}/archive", s.cardArchive)
+	m.HandleFunc("DELETE /api/cards/{id}/archive", s.cardUnarchive)
 	m.HandleFunc("PATCH /api/boards/{id}", s.renameBoard)
 	m.HandleFunc("DELETE /api/boards/{id}", s.deleteBoard)
 	m.HandleFunc("POST /api/boards/{id}/columns", s.addColumn)
@@ -161,8 +164,7 @@ func (s *Server) deleteColumn(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// cardReq covers both create and patch. For patch, absent fields are left
-// alone; column_id+position together mean "move".
+// cardReq 는 생성·수정 공용. column_id+position 이 같이 오면 이동이다.
 type cardReq struct {
 	Title      *string `json:"title"`
 	Content    *string `json:"content"` // 블록 문서 JSON. description은 서버가 파생한다.
@@ -180,9 +182,7 @@ func (r cardReq) input() store.CardInput {
 	return store.CardInput{Title: r.Title, Content: r.Content, DueAt: r.DueAt, EndAt: r.EndAt, Recur: r.Recur, RecurUntil: r.RecurUntil, AssigneeID: r.AssigneeID, Priority: r.Priority}
 }
 
-// quotaBlocked는 한도를 넘었으면 507을 쓰고 true를 돌려준다.
-// 새로 만드는 요청에만 건다 — 수정과 삭제는 막지 않는다. 막으면 사용자가
-// 공간을 비울 방법이 사라진다.
+// quotaBlocked 는 한도를 넘으면 507. 새로 만들기에만 건다(수정·삭제를 막으면 비울 방법이 없다).
 func (s *Server) quotaBlocked(w http.ResponseWriter, r *http.Request) bool {
 	over, st, err := s.st.QuotaExceeded(r.Context())
 	if err != nil {
@@ -243,7 +243,7 @@ func (s *Server) patchCard(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "column_id and position must be given together")
 		return
 	}
-	// Field edits first, then the move, so a combined request is one round-trip.
+	// 필드 수정 먼저, 그다음 이동.
 	c, err := s.st.UpdateCard(r.Context(), id, req.input())
 	if s.storeErr(w, err, "update card") {
 		return
@@ -266,4 +266,43 @@ func (s *Server) deleteCard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// GET /api/boards/{id}/archive?q= — 완료 뒤 한 달이 지나 보관된 카드.
+func (s *Server) boardArchive(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	cards, err := s.st.ArchivedCards(r.Context(), id, r.URL.Query().Get("q"))
+	if s.storeErr(w, err, "board archive") {
+		return
+	}
+	writeJSON(w, http.StatusOK, cards)
+}
+
+// POST /api/cards/{id}/archive — 완료 카드를 지금 보관.
+func (s *Server) cardArchive(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	c, err := s.st.ArchiveCard(r.Context(), id)
+	if s.storeErr(w, err, "archive card") {
+		return
+	}
+	writeJSON(w, http.StatusOK, c)
+}
+
+// DELETE /api/cards/{id}/archive — 보관을 풀어 완료 칸으로.
+func (s *Server) cardUnarchive(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	c, err := s.st.UnarchiveCard(r.Context(), id)
+	if s.storeErr(w, err, "unarchive card") {
+		return
+	}
+	writeJSON(w, http.StatusOK, c)
 }

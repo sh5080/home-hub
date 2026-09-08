@@ -28,26 +28,31 @@ type Column struct {
 
 // Card is a task on a column.
 type Card struct {
-	ID          int64   `json:"id"`
-	ColumnID    int64   `json:"column_id"`
-	Title       string  `json:"title"`
-	Description string  `json:"description"` // content에서 파생한 평문 (미리보기·검색용)
-	Content     *string `json:"content"`     // 권위 있는 본문. 블록 문서 JSON
-	Position    int     `json:"position"`
-	DueAt       *string `json:"due_at"` // 'YYYY-MM-DD' 또는 'YYYY-MM-DDTHH:MM'
-	EndAt       *string `json:"end_at"` // 여러 날 항목의 끝. 없으면 하루짜리
-	// 반복 규칙. 자세한 형식은 store/recur.go.
+	ID            int64   `json:"id"`
+	ColumnID      int64   `json:"column_id"`
+	Title         string  `json:"title"`
+	Description   string  `json:"description"` // content에서 파생한 평문 (미리보기·검색용)
+	Content       *string `json:"content"`     // 권위 있는 본문. 블록 문서 JSON
+	Position      int     `json:"position"`
+	DueAt         *string `json:"due_at"` // 'YYYY-MM-DD' 또는 'YYYY-MM-DDTHH:MM'
+	EndAt         *string `json:"end_at"` // 여러 날 항목의 끝. 없으면 하루짜리
 	Recur         *string `json:"recur"`
 	RecurUntil    *string `json:"recur_until"`
 	RecurParentID *int64  `json:"recur_parent_id"`
-	// RecurLabel은 규칙을 사람이 읽는 말로 옮긴 것. 해석을 서버에 둔다.
+	// RecurLabel 은 규칙을 사람이 읽는 말로 옮긴 것.
 	RecurLabel string `json:"recur_label"`
 	Priority   int    `json:"priority"` // 0=없음, 1~3
 	AssigneeID *int64 `json:"assignee_id"`
 	CreatedBy  int64  `json:"created_by"`
 	CreatedAt  int64  `json:"created_at"`
 	UpdatedAt  int64  `json:"updated_at"`
+	// 보관 목록·카드 상세에서만 채운다(omitempty — 비면 응답에서 빠진다).
+	DoneAt     *int64 `json:"done_at,omitempty"`
+	ArchivedAt *int64 `json:"archived_at,omitempty"`
 }
+
+// ArchiveAfter 는 완료 후 보드에서 빠지기까지의 시간.
+const ArchiveAfter = 30 * 24 * time.Hour
 
 // BoardDetail is what the board page renders in one request.
 type BoardDetail struct {
@@ -59,7 +64,7 @@ type BoardDetail struct {
 func (s *Store) ListBoards(ctx context.Context) ([]Board, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT b.id, b.name, b.created_by, b.created_at,
-		       (SELECT count(*) FROM cards c JOIN columns col ON col.id = c.column_id WHERE col.board_id = b.id)
+		       (SELECT count(*) FROM cards c JOIN columns col ON col.id = c.column_id WHERE col.board_id = b.id AND c.archived_at IS NULL)
 		FROM boards b ORDER BY b.id`)
 	if err != nil {
 		return nil, err
@@ -133,8 +138,7 @@ func (s *Store) DeleteBoard(ctx context.Context, id int64) error {
 	return nil
 }
 
-// GetBoard loads the board, its columns in order, and each column's cards
-// ordered by sort (SortManual = 드래그로 정한 순서).
+// GetBoard 는 보드, 순서대로 칸, 칸마다 정렬된 카드를 준다.
 func (s *Store) GetBoard(ctx context.Context, id int64, sortBy Sort, order Order) (BoardDetail, error) {
 	var d BoardDetail
 	err := s.db.QueryRowContext(ctx, `SELECT id, name, created_by, created_at FROM boards WHERE id=?`, id).
@@ -146,9 +150,7 @@ func (s *Store) GetBoard(ctx context.Context, id int64, sortBy Sort, order Order
 		return d, err
 	}
 
-	// Two flat queries, assembled in Go: cheaper than a JOIN that repeats
-	// column rows per card, and the single connection means we must not nest
-	// an open rows cursor inside another query anyway.
+	// 칸·카드를 따로 읽어 Go 에서 붙인다(커넥션 하나 — 커서를 겹쳐 열지 않는다).
 	cols, err := s.db.QueryContext(ctx, `SELECT id, board_id, name, position FROM columns WHERE board_id=? ORDER BY position, id`, id)
 	if err != nil {
 		return d, err
@@ -169,10 +171,15 @@ func (s *Store) GetBoard(ctx context.Context, id int64, sortBy Sort, order Order
 		d.Columns = []Column{}
 	}
 
+	// 완료 한 달 지난 카드는 보드를 열 때 보관으로 넘긴다.
+	if err := s.archiveOld(ctx, id); err != nil {
+		return d, err
+	}
+
 	cards, err := s.db.QueryContext(ctx, `
 		SELECT c.id, c.column_id, c.title, c.description, c.content, c.position, c.due_at, c.end_at, c.priority, c.assignee_id, c.created_by, c.created_at, c.updated_at, c.recur, c.recur_until, c.recur_parent_id
 		FROM cards c JOIN columns col ON col.id = c.column_id
-		WHERE col.board_id=? ORDER BY c.column_id, `+orderBy(sortBy, order, "c."), id)
+		WHERE col.board_id=? AND c.archived_at IS NULL ORDER BY c.column_id, `+orderBy(sortBy, order, "c."), id)
 	if err != nil {
 		return d, err
 	}
@@ -267,4 +274,93 @@ func (s *Store) DeleteColumn(ctx context.Context, id int64) error {
 		return err
 	}
 	return tx.Commit()
+}
+
+// doneColumnSQL 은 보드의 마지막 칸(= 완료) id.
+const doneColumnSQL = `(SELECT c2.id FROM columns c2 WHERE c2.board_id = ? ORDER BY c2.position DESC, c2.id DESC LIMIT 1)`
+
+// archiveOld 는 그 보드의 완료 칸에서 한 달 넘은 카드를 보관으로 넘긴다.
+func (s *Store) archiveOld(ctx context.Context, boardID int64) error {
+	now := time.Now()
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE cards SET archived_at=?
+		 WHERE archived_at IS NULL AND column_id = `+doneColumnSQL+`
+		   AND COALESCE(done_at, updated_at) < ?`,
+		now.Unix(), boardID, now.Add(-ArchiveAfter).Unix())
+	return err
+}
+
+// ArchivedCards 는 보관된 카드를 최근 완료순으로 준다(q 로 검색).
+func (s *Store) ArchivedCards(ctx context.Context, boardID int64, q string) ([]Card, error) {
+	where := []string{"col.board_id = ?", "c.archived_at IS NOT NULL"}
+	args := []any{boardID}
+	terms := strings.Fields(q)
+	if len(terms) > 8 {
+		terms = terms[:8]
+	}
+	for _, t := range terms {
+		where = append(where, `(c.title LIKE ? ESCAPE '\' COLLATE NOCASE OR c.description LIKE ? ESCAPE '\' COLLATE NOCASE)`)
+		pat := "%" + likeEscape(t) + "%"
+		args = append(args, pat, pat)
+	}
+	// 조건절은 상수 조합, 값은 전부 ?.
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT c.id, c.column_id, c.title, c.description, c.position, c.due_at, c.priority, c.assignee_id,
+		       c.created_by, c.created_at, c.updated_at, c.done_at, c.archived_at
+		  FROM cards c JOIN columns col ON col.id = c.column_id
+		 WHERE `+strings.Join(where, " AND ")+`
+		 ORDER BY COALESCE(c.done_at, c.updated_at) DESC, c.id DESC
+		 LIMIT 200`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Card{}
+	for rows.Next() {
+		var c Card
+		if err := rows.Scan(&c.ID, &c.ColumnID, &c.Title, &c.Description, &c.Position, &c.DueAt, &c.Priority, &c.AssigneeID,
+			&c.CreatedBy, &c.CreatedAt, &c.UpdatedAt, &c.DoneAt, &c.ArchivedAt); err != nil {
+			return nil, err
+		}
+		c.Description = cutRunes(c.Description, 80)
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+// ArchiveCard 는 완료 칸의 카드만 바로 보관한다.
+func (s *Store) ArchiveCard(ctx context.Context, id int64) (Card, error) {
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE cards SET archived_at=?, done_at=COALESCE(done_at, ?)
+		 WHERE id=? AND archived_at IS NULL
+		   AND column_id = (SELECT c2.id FROM columns c1 JOIN columns c2 ON c2.board_id = c1.board_id
+		                     WHERE c1.id = cards.column_id ORDER BY c2.position DESC, c2.id DESC LIMIT 1)`,
+		time.Now().Unix(), time.Now().Unix(), id)
+	if err != nil {
+		return Card{}, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		c, err := s.GetCard(ctx, id)
+		if err != nil {
+			return Card{}, err
+		}
+		if c.ArchivedAt != nil {
+			return c, nil
+		}
+		return Card{}, invalid("완료한 카드만 보관할 수 있어요")
+	}
+	return s.GetCard(ctx, id)
+}
+
+// UnarchiveCard 는 보관을 풀고 done_at 을 지금으로 맞춘다(안 그러면 곧바로 다시 보관된다).
+func (s *Store) UnarchiveCard(ctx context.Context, id int64) (Card, error) {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE cards SET archived_at=NULL, done_at=? WHERE id=? AND archived_at IS NOT NULL`, time.Now().Unix(), id)
+	if err != nil {
+		return Card{}, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return s.GetCard(ctx, id)
+	}
+	return s.GetCard(ctx, id)
 }
