@@ -1,8 +1,4 @@
-// Package notion imports a Notion "Markdown & CSV" workspace export.
-//
-// 이 패키지는 특정 export를 보고 썼다. 노션의 CSV는 한국어 열 이름과 한국어
-// 날짜 문자열을 그대로 내보내고, 페이지 본문은 제목 + "키: 값" 속성 블록 +
-// 실제 본문 순서로 된 마크다운이다. 그 구조에 맞춰 파싱한다.
+// Package notion 은 노션 'Markdown & CSV' export 를 읽는다(한국어 열 이름·날짜).
 package notion
 
 import (
@@ -42,10 +38,9 @@ const (
 // Export는 파싱 결과다.
 type Export struct {
 	Items []Item
-	// Skipped는 가져오지 않은 것들의 사유별 개수 — dry-run이 보여준다.
+	// Skipped 는 가져오지 않은 것의 사유별 개수.
 	Skipped map[string]int
-	// Images는 export에 들어 있던 이미지 파일 이름이다. 지금은 가져오지
-	// 않지만, 몇 개가 남는지 알려주려고 센다.
+	// Images 는 export 의 이미지 파일 이름(가져오지는 않는다).
 	Images []string
 }
 
@@ -61,14 +56,10 @@ const (
 
 const eventSelect = "📆" // '선택' 값이 이걸 포함하면 캘린더 일정
 
-// utf8BOM은 노션 export의 CSV·MD 앞에 붙는 바이트 순서 표시다. 남겨두면
-// 첫 열 이름이나 제목이 어긋난다. (소스에 문자를 직접 쓰면 Go가 거부한다.)
+// utf8BOM 은 노션 CSV·MD 앞의 BOM. 남기면 첫 열 이름이 어긋난다.
 const utf8BOM = "\xef\xbb\xbf"
 
-// Parse reads a Notion export zip and returns the items to import.
-//
-// 여러 CSV가 있을 때 "_all.csv"(전체 데이터베이스)를 우선한다 — 나머지는
-// 필터된 뷰라서 행이 빠진다. 같은 이름이 여러 CSV에 나오면 한 번만 넣는다.
+// Parse 는 export zip 을 읽는다. '_all.csv'(전체 DB)를 우선하고 같은 이름은 한 번만 넣는다.
 func Parse(zipPath string) (*Export, error) {
 	z, err := zip.OpenReader(zipPath)
 	if err != nil {
@@ -78,7 +69,6 @@ func Parse(zipPath string) (*Export, error) {
 
 	out := &Export{Skipped: map[string]int{}}
 
-	// 1) 페이지 본문을 제목으로 찾을 수 있게 색인한다.
 	bodies := map[string]string{}
 	var csvFiles []*zip.File
 	for _, f := range z.File {
@@ -102,7 +92,6 @@ func Parse(zipPath string) (*Export, error) {
 		}
 	}
 
-	// 2) "_all"이 붙은 전체 CSV를 먼저 읽는다.
 	sort.Slice(csvFiles, func(i, j int) bool {
 		return strings.Contains(decodeName(csvFiles[i]), "_all.") &&
 			!strings.Contains(decodeName(csvFiles[j]), "_all.")
@@ -147,7 +136,7 @@ func Parse(zipPath string) (*Export, error) {
 			}
 			it.Start, it.End, it.AllDay = parseKoreanDate(row[colDate])
 			if it.Start == "" && it.Kind == KindEvent {
-				// 날짜 없는 일정은 캘린더에 놓을 자리가 없다 — 할 일로 돌린다.
+				// 날짜 없는 일정은 할 일로 돌린다.
 				it.Kind = KindTodo
 				out.Skipped["날짜 없어 할 일로 변환된 일정"]++
 			}
@@ -160,8 +149,7 @@ func Parse(zipPath string) (*Export, error) {
 	return out, nil
 }
 
-// decodeName은 zip 항목 이름을 UTF-8로 되돌린다. UTF-8 플래그가 없는 항목은
-// archive/zip이 CP437로 디코드해두므로 바이트를 복원해 다시 읽는다.
+// decodeName 은 zip 이름을 UTF-8 로 되돌린다(플래그 없으면 archive/zip 이 CP437 로 읽는다).
 func decodeName(f *zip.File) string {
 	if f.NonUTF8 && !utf8.ValidString(f.Name) {
 		b := make([]byte, 0, len(f.Name))
@@ -187,7 +175,6 @@ func readCSV(f *zip.File) ([]map[string]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	// 노션 CSV는 UTF-8 BOM으로 시작한다 — 남겨두면 첫 열 이름이 안 맞는다.
 	data = []byte(strings.TrimPrefix(string(data), utf8BOM))
 
 	r := csv.NewReader(strings.NewReader(string(data)))
@@ -248,14 +235,11 @@ func relationName(s string) string {
 	return strings.TrimSpace(s)
 }
 
-// parseKoreanDate는 노션이 내보내는 한국어 날짜를 우리 형식으로 옮긴다.
+// parseKoreanDate 는 노션의 한국어 날짜를 우리 형식으로 옮긴다.
 //
-//	"2026년 9월 17일"                      → 2026-09-17, 종일
-//	"2025년 11월 5일 오전 9:00 (GMT+9)"     → 2025-11-05T09:00
-//	"2025년 11월 14일 → 2025년 11월 16일"   → 시작/끝, 종일
+//	"2026년 9월 17일" → 2026-09-17 / "… 오전 9:00 (GMT+9)" → T09:00 / "A → B" → 시작·끝
 //
-// 타임존 표기는 버린다. 저장 형식 자체가 타임존 없는 로컬 벽시계라
-// (0001_init.sql 참고) GMT+9 문자열을 해석할 필요가 없다.
+// 타임존 표기는 버린다(저장 형식이 떠다니는 로컬 시각).
 var dateRx = regexp.MustCompile(`(\d{4})년\s*(\d{1,2})월\s*(\d{1,2})일(?:\s*(오전|오후)\s*(\d{1,2}):(\d{2}))?`)
 
 func parseKoreanDate(s string) (start, end string, allDay bool) {
@@ -274,7 +258,7 @@ func parseKoreanDate(s string) (start, end string, allDay bool) {
 	if !startTimed {
 		return start, end, true
 	}
-	// 시각이 있는 항목의 끝도 시각 형식이어야 서버 검증을 통과한다.
+	// 시각 있는 항목의 끝도 시각 형식이어야 검증을 통과한다.
 	if end != "" && len(end) == 10 {
 		end += "T23:59"
 	}

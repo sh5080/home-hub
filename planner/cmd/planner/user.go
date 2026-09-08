@@ -25,8 +25,7 @@ func cmdUser(args []string) error {
 	fs := flag.NewFlagSet("user "+sub, flag.ExitOnError)
 	data := dataFlag(fs)
 
-	// flag stops at the first positional, so re-parse past it: this accepts
-	// `user add NAME --data DIR`, `user add --data DIR NAME`, and `user list --data DIR`.
+	// flag 는 첫 위치 인자에서 멈추므로 그 뒤를 다시 파싱한다.
 	var name string
 	remaining := args[1:]
 	for {
@@ -113,8 +112,7 @@ func cmdUser(args []string) error {
 	}
 }
 
-// promptPassword reads a password without echo when stdin is a terminal,
-// falling back to a plain line read (pipes, CI). confirm asks twice.
+// promptPassword 는 터미널이면 에코 없이, 아니면 한 줄을 읽는다. confirm 이면 두 번 묻는다.
 func promptPassword(confirm bool) (string, error) {
 	stdin := bufio.NewReader(os.Stdin) // one reader: a fresh one per read would swallow the 2nd line
 	read := func(label string) (string, error) {

@@ -14,11 +14,7 @@ import (
 	"github.com/sh5080/home-hub/planner/internal/store"
 )
 
-// cmdImport: planner import notion <export.zip> [--board NAME] [--apply] [--data DIR]
-//
-// 기본은 dry-run이다. 무엇이 들어가고 무엇이 버려지는지 먼저 보여주고,
-// --apply를 줘야 실제로 쓴다. 가져오기는 되돌리기 어려운 작업이라 기본값을
-// 안전한 쪽에 둔다.
+// planner import notion <export.zip> [--board NAME] [--apply] (기본 dry-run)
 func cmdImport(args []string) error {
 	if len(args) < 2 || args[0] != "notion" {
 		return errors.New("usage: planner import notion <export.zip> [--board NAME] [--apply] [--data DIR]")
@@ -36,8 +32,7 @@ func cmdImport(args []string) error {
 		return err
 	}
 
-	// 칸반과 캘린더가 같은 데이터를 보는 뷰이므로 일정도 카드로 들어간다.
-	// 노션의 '선택'(일정/할일)은 어느 컬럼에 놓을지에만 쓴다.
+	// 일정도 카드로 들어간다. 노션의 '선택'은 칸을 고르는 데만 쓴다.
 	var events, todos []notion.Item
 	for _, it := range ex.Items {
 		if it.Kind == notion.KindEvent {
@@ -82,7 +77,7 @@ func cmdImport(args []string) error {
 	defer st.Close()
 	ctx := context.Background()
 
-	// 가져오기 전 스냅샷. 잘못되면 이 파일로 되돌린다.
+	// 가져오기 전 스냅샷.
 	snap := fmt.Sprintf("%s/before-import.db", *data)
 	if err := st.Backup(ctx, snap); err != nil {
 		return fmt.Errorf("스냅샷 실패 (가져오기 중단): %w", err)
@@ -98,7 +93,7 @@ func cmdImport(args []string) error {
 	}
 	by := users[0].ID // 가져온 항목의 작성자
 
-	// 대상 보드: 같은 이름이 있으면 재사용한다(두 번 돌려도 보드가 안 늘어난다).
+	// 같은 이름 보드는 재사용한다.
 	boards, err := st.ListBoards(ctx)
 	if err != nil {
 		return err
@@ -163,7 +158,7 @@ func cmdImport(args []string) error {
 			dup++
 			continue
 		}
-		// 지난 일정을 첫 컬럼에 넣으면 '연체된 할 일'로 보인다 — 날짜로 가른다.
+		// 지난 일정은 완료 칸으로(첫 칸이면 연체된 할 일로 보인다).
 		col := firstCol
 		if it.Start < todayStr {
 			col = lastCol
@@ -190,14 +185,12 @@ func cmdImport(args []string) error {
 	return nil
 }
 
-// buildBody는 카드/일정의 본문을 만든다. 노션 본문 앞에, 우리 스키마에 자리가
-// 없는 속성(분류·내용)을 콜아웃으로 남긴다 — 버리지 않고 눈에 보이게.
+// buildBody 는 노션 본문 앞에 우리 스키마에 없는 속성(분류·내용)을 콜아웃으로 남긴다.
 func buildBody(it notion.Item) string {
 	var head []string
 	if it.Category != "" {
 		head = append(head, "분류: "+it.Category)
 	}
-	// 중요도는 priority 컬럼으로 들어간다 — 본문에 중복해 쓰지 않는다.
 	if it.Note != "" {
 		head = append(head, it.Note)
 	}

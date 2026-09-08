@@ -1,10 +1,6 @@
 package store
 
-// Sort는 카드 목록의 정렬 기준이다.
-//
-// 수동(SortManual)일 때만 드래그로 바꾼 position이 화면 순서가 된다. 다른
-// 기준을 켜면 정렬이 매번 덮어쓰므로 드래그 재정렬은 의미가 없어진다 —
-// UI도 그때는 재정렬을 막는다.
+// Sort 는 카드 정렬 기준.
 type Sort string
 
 const (
@@ -13,8 +9,7 @@ const (
 	SortPriority Sort = "priority"
 )
 
-// ParseSort는 쿼리 파라미터를 받는다. 모르는 값은 수동으로 떨어뜨린다 —
-// 정렬 이름 오타로 500을 내기보다 기본 동작을 하는 편이 낫다.
+// ParseSort 는 모르는 값을 수동으로 떨어뜨린다.
 func ParseSort(s string) Sort {
 	switch Sort(s) {
 	case SortTime:
@@ -26,8 +21,7 @@ func ParseSort(s string) Sort {
 	}
 }
 
-// Order는 정렬 방향이다. 기준(Sort)과 방향을 따로 두면 조합마다 SQL을
-// 새로 쓰지 않아도 된다.
+// Order 는 정렬 방향.
 type Order bool
 
 const (
@@ -43,16 +37,10 @@ func ParseOrder(s string) Order {
 	return Asc
 }
 
-// orderBy는 정렬 기준에 해당하는 SQL 절을 준다. 문자열 조립이지만 값이
-// 하드코딩 상수뿐이라 주입 경로가 없다(ParseSort가 외부 입력을 걸러낸다).
-//
-// 두 기준 모두 마지막에 position으로 끊는다 — 수동 순서가 최종 동점자다.
-// 마감 없는 카드는 항상 뒤로 보낸다(NULL이 먼저 오면 날짜순이 안 보인다).
+// orderBy 는 정렬 SQL 절(상수 조합뿐). 마지막 동점자는 position.
+// 마감 없는 카드는 방향과 무관하게 항상 뒤.
 func orderBy(s Sort, o Order, prefix string) string {
 	p := prefix
-	// 방향을 뒤집을 때도 "마감 없는 것은 항상 뒤"는 유지한다. 날짜가 없는
-	// 카드가 맨 앞에 몰리면 목록을 읽을 수 없다 — 방향은 '값이 있는 것들'
-	// 사이의 순서일 뿐이다.
 	dir := func(asc, desc string) string {
 		if o == Desc {
 			return desc

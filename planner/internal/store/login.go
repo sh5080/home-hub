@@ -7,21 +7,17 @@ import (
 	"time"
 )
 
-// 계정 잠금 단계. 연속 실패가 accountThreshold를 넘을 때마다 다음 단계로 간다.
-// 영구 잠금은 두지 않는다 — 가족이 스스로 걸릴 텐데 내가 풀어줘야 하면 곤란하다.
+// 계정 잠금 단계. 영구 잠금은 없다(가족이 스스로 걸린다).
 var lockSteps = []time.Duration{time.Minute, 5 * time.Minute, 15 * time.Minute, time.Hour}
 
 const (
 	accountThreshold = 5 // 연속 실패 5회부터 잠금
 
-	// IP 버킷: 창 안에서 시도 자체를 제한한다. 계정 잠금과 달리 성공해도 줄지
-	// 않는다 — 목적이 '누가 맞혔나'가 아니라 'bcrypt를 몇 번 돌렸나'이기 때문.
+	// IP 버킷은 창 안의 시도 수를 센다. 성공해도 줄지 않는다(목적은 bcrypt 횟수 제한).
 	ipWindow = 15 * time.Minute
 	ipMax    = 20
 
-	// 없는 이름으로 시도하는 건 가족일 수 없다 — 자기 이름은 틀리지 않는다.
-	// 스캐너 신호로 보고 IP를 세게 막는다. 오탐이 거의 없는 대신, 셀룰러
-	// CGNAT를 공유하는 가족이 걸릴 수 있어 영구 차단은 하지 않는다.
+	// 없는 이름 시도는 스캐너 신호라 IP 를 세게 막는다. CGNAT 오탐 때문에 영구 차단은 없다.
 	unknownThreshold = 3
 	unknownLock      = time.Hour
 )
@@ -32,9 +28,8 @@ type LoginGate struct {
 	Retry   time.Duration // Retry-After 헤더용
 }
 
-// CheckLogin은 계정 키와 IP 키를 모두 보고 시도를 허용할지 정한다.
-// 호출자는 막히더라도 비밀번호 비교를 건너뛰면 안 된다 — 응답이 즉시 돌아오면
-// 잠금 상태가 타이밍으로 드러난다.
+// CheckLogin 은 계정·IP 키로 시도 허용 여부를 정한다.
+// 호출자는 막혀도 비밀번호 비교를 건너뛰면 안 된다(타이밍으로 잠금이 드러난다).
 func (s *Store) CheckLogin(ctx context.Context, account, ip string, now time.Time) (LoginGate, error) {
 	for _, key := range keysFor(account, ip) {
 		var lockedUntil, windowStart int64
@@ -69,9 +64,8 @@ const (
 	AttemptUnknownUser                // 이름 자체가 없음 — 스캐너 신호
 )
 
-// RecordAttempt는 시도 결과를 남긴다. 성공이면 계정 키를 지우고, 실패면 계정
-// 연속 실패를 올려 필요하면 잠근다. IP 창은 성공·실패 무관하게 올라가고,
-// 없는 이름 시도는 IP 키의 fails를 올려 임계값을 넘으면 그 IP를 잠근다.
+// RecordAttempt 는 결과를 남긴다. 성공이면 계정 키를 지우고 실패면 연속 실패를 올린다.
+// IP 창은 성공·실패 무관하게 올라간다.
 func (s *Store) RecordAttempt(ctx context.Context, account, ip string, outcome AttemptOutcome, now time.Time) error {
 	success := outcome == AttemptSuccess
 	tx, err := s.db.BeginTx(ctx, nil)

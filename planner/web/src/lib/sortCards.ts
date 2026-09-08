@@ -2,16 +2,8 @@ import type { Card } from '../api'
 import type { SortMode, SortOrder } from './hooks'
 
 /**
- * 카드 정렬. 컬럼마다 다른 기준을 쓸 수 있어야 해서 클라이언트에서 돈다.
- *
- * **서버의 orderBy(internal/store/sort.go)와 규칙이 같아야 한다.** 홈의
- * "오늘 할 일"은 여러 보드를 가로지르는 조회라 서버에서 정렬하고, 보드는
- * 컬럼별로 달라야 해서 여기서 정렬한다. 규칙을 바꾸면 양쪽을 함께 고친다.
- *
- * 공통 규칙 두 가지:
- *   - 마감 없는 카드는 방향과 무관하게 항상 뒤. 역순이라고 날짜 없는 것이
- *     앞에 몰리면 목록을 읽을 수 없다.
- *   - 마지막 동점자는 position — 손으로 정한 순서가 최종 기준이다.
+ * 카드 정렬(칸마다 방향이 달라 클라이언트에서 돈다).
+ * 서버 orderBy(store/sort.go)와 규칙이 같아야 한다: 마감 없는 건 항상 뒤, 마지막 동점자는 position.
  */
 export function sortCards(cards: Card[], mode: SortMode, order: SortOrder): Card[] {
   const dir = order === 'desc' ? -1 : 1

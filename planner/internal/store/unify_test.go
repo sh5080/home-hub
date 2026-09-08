@@ -8,8 +8,7 @@ import (
 	"time"
 )
 
-// 0006 이전 DB(events 테이블이 있는)를 열면 행이 cards로 옮겨지고 테이블이
-// 사라져야 한다. 지난 일정은 마지막 컬럼, 앞으로의 일정은 첫 컬럼.
+// 0006 이전 DB 를 열면 events 가 cards 로 옮겨지고 표가 사라진다.
 func TestEventsAreMovedIntoCards(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "planner.db")
@@ -31,7 +30,6 @@ func TestEventsAreMovedIntoCards(t *testing.T) {
 			t.Fatalf("apply %s: %v", m.Name, err)
 		}
 	}
-	// 0003/0004가 만든 events 컬럼 구성을 그대로 갖춘 테이블이 이 시점에 있다.
 	now := time.Now().Unix()
 	if _, err := raw.Exec(`INSERT INTO users (id,name,password_hash,created_at) VALUES (1,'t','x',?)`, now); err != nil {
 		t.Fatal(err)

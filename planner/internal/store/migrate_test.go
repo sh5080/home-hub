@@ -8,12 +8,8 @@ import (
 	"testing"
 )
 
-// TestSchemaSnapshot pins the schema that all migrations produce from scratch.
-// When you add a migration, the diff here is the review artifact — run
-//
-//	UPDATE_SNAPSHOT=1 go test ./internal/store -run TestSchemaSnapshot
-//
-// to accept it and commit testdata/schema.sql alongside the migration.
+// TestSchemaSnapshot 은 마이그레이션이 만드는 스키마를 고정한다.
+// 바꿨으면: UPDATE_SNAPSHOT=1 go test ./internal/store -run TestSchemaSnapshot
 func TestSchemaSnapshot(t *testing.T) {
 	st, err := Open(t.TempDir())
 	if err != nil {
@@ -99,12 +95,7 @@ func TestModifiedMigrationIsRefused(t *testing.T) {
 	}
 }
 
-// TestLegacyUserVersionIsAdopted: PRAGMA user_version 시절에 만들어진 DB는
-// 이력을 기록만 하고 재적용하지 않는다(재적용하면 CREATE TABLE에서 깨진다).
-// 실기의 로컬·Pi DB가 그 방식으로 생겼기 때문에 필요한 경로다.
-//
-// 1번만 적용된 DB를 직접 만든다 — 최신 DB에서 이후 마이그레이션을 되돌리는
-// 방식이면 마이그레이션을 추가할 때마다 이 테스트를 고쳐야 한다.
+// user_version 시절 DB 는 이력만 기록하고 재적용하지 않는다(재적용하면 CREATE TABLE 에서 깨진다).
 func TestLegacyUserVersionIsAdopted(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "planner.db")

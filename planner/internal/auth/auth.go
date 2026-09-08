@@ -17,8 +17,7 @@ const CookieName = "planner_session"
 // SessionTTL is how long a login lasts. Sliding expiry is deferred.
 const SessionTTL = 30 * 24 * time.Hour
 
-// bcrypt cost 10 ≈ 1s on a Pi 3B. Logins are rare with 30-day sessions,
-// so don't lower it.
+// bcrypt cost 10 ≈ Pi 3B 에서 1초. 낮추지 않는다.
 const bcryptCost = 10
 
 // HashPassword returns the bcrypt hash for storage.
@@ -41,10 +40,8 @@ func NewToken() (string, error) {
 	return hex.EncodeToString(b), nil
 }
 
-// SetCookie writes the session cookie. Behind `tailscale serve` the request
-// arrives over plain HTTP (r.TLS == nil), so Secure can't be inferred from the
-// request; the caller decides via dev. Safari refuses Secure cookies over
-// http://localhost, which is why dev mode drops the flag.
+// SetCookie 는 세션 쿠키를 쓴다. tailscale serve 뒤에선 r.TLS 가 nil 이라 Secure 는
+// dev 로 정한다(Safari 는 http://localhost 에서 Secure 쿠키를 거부한다).
 func SetCookie(w http.ResponseWriter, token string, dev bool) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     CookieName,

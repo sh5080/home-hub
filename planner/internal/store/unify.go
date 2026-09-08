@@ -5,12 +5,8 @@ import (
 	"time"
 )
 
-// backfillEvents는 0006 이전에 events 테이블에 있던 행을 cards로 옮기고 그
-// 테이블을 지운다. events가 없으면 즉시 반환하므로 멱등이다.
-//
-// 어느 컬럼에 넣을지는 날짜로 정한다: 이미 지난 일정은 마지막 컬럼(완료),
-// 앞으로의 일정은 첫 컬럼(할 일). 전부 첫 컬럼에 넣으면 지난 일정이 '연체된
-// 할 일'로 보이고 홈의 오늘 할 일에까지 올라온다.
+// backfillEvents 는 0006 이전 events 행을 cards 로 옮기고 표를 지운다(멱등).
+// 지난 일정은 완료 칸, 앞으로의 일정은 첫 칸으로.
 func (s *Store) backfillEvents() error {
 	var exists int
 	if err := s.db.QueryRow(
@@ -52,8 +48,7 @@ func (s *Store) backfillEvents() error {
 	defer tx.Rollback()
 
 	if len(evs) > 0 {
-		// 일정이 갈 보드는 카드가 가장 많은 보드다 — 노션에서 한 데이터베이스
-		// 였으니 같은 보드로 돌려놓는 게 맞다.
+		// 카드가 가장 많은 보드로 보낸다.
 		var boardID int64
 		if err := tx.QueryRow(`
 			SELECT b.id FROM boards b
@@ -70,7 +65,6 @@ func (s *Store) backfillEvents() error {
 			return fmt.Errorf("last column: %w", err)
 		}
 
-		// 컬럼별 다음 position을 미리 읽어 이어붙인다.
 		next := map[int64]int{}
 		for _, col := range []int64{firstCol, lastCol} {
 			var n int

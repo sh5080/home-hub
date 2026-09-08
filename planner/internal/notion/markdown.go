@@ -6,14 +6,9 @@ import (
 	"strings"
 )
 
-// 마크다운 → 블록 문서. 전체 마크다운을 지원하지 않는다 — 이 export에 실제로
-// 나타난 것만 다룬다(제목, 글머리/번호 목록, 인용, 구분선, 링크, 굵게, 코드).
-// 모르는 줄은 버리지 않고 단락으로 남긴다: 가져오기에서 조용한 데이터 손실이
-// 제일 나쁘다.
+// 마크다운 → 블록 문서. 이 export 에 나온 것만 다룬다. 모르는 줄은 단락으로 남긴다(조용한 손실 방지).
 
-// 편집기의 인라인 콘텐츠는 두 모양이다. 텍스트는 styles를 반드시 갖고,
-// 링크는 href와 안쪽 content를 갖되 styles가 없다. 한 구조체로 합치면
-// 링크에 "styles":null이 붙어 편집기가 이상하게 받는다.
+// 인라인은 두 모양이다: 텍스트는 styles 필수, 링크는 styles 가 없어야 한다(null 이 붙으면 편집기가 깨진다).
 type inline interface{ isInline() }
 
 type textNode struct {
@@ -63,7 +58,6 @@ func MarkdownToBlocks(md string) string {
 	for _, ln := range lines {
 		trimmed := strings.TrimSpace(ln)
 
-		// 코드 펜스
 		if strings.HasPrefix(trimmed, "```") {
 			if inCode {
 				blocks = append(blocks, block("codeBlock", text(strings.Join(codeBuf, "\n"))))
@@ -78,7 +72,7 @@ func MarkdownToBlocks(md string) string {
 			continue
 		}
 
-		// 콜아웃 표식 (위에서 <aside>를 치환해 둔 것)
+		// 콜아웃 표식(<aside> 를 치환해 둔 것)
 		if strings.HasPrefix(trimmed, "\x00CALLOUT\x00") {
 			body := strings.TrimSuffix(strings.TrimPrefix(trimmed, "\x00CALLOUT\x00"), "\x00END\x00")
 			for _, part := range strings.Split(body, "\n") {
@@ -153,8 +147,7 @@ func link(label, href string) inline {
 	return linkNode{Type: "link", Href: href, Content: []textNode{{Type: "text", Text: label, Styles: map[string]bool{}}}}
 }
 
-// parseInline은 링크 → 굵게 → 인라인코드 순으로 훑는다. 중첩은 다루지 않는다
-// (이 export에 없다). 남는 건 평문이다.
+// parseInline 은 링크 → 굵게 → 인라인코드 순. 중첩은 다루지 않는다.
 func parseInline(s string) []inline {
 	if s == "" {
 		return []inline{}
@@ -192,7 +185,6 @@ func styled(s string) []inline {
 	for {
 		bold := rxBold.FindStringSubmatchIndex(rest)
 		code := rxCode.FindStringSubmatchIndex(rest)
-		// 더 앞에 있는 것을 먼저 처리한다
 		var loc []int
 		var style string
 		switch {

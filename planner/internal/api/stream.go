@@ -8,11 +8,7 @@ import (
 	"time"
 )
 
-// hub는 "뭔가 바뀌었다"를 구독자에게 알린다.
-//
-// 무엇이 바뀌었는지는 보내지 않는다 — 클라이언트는 그냥 다시 불러오면 되고,
-// 변경 종류를 프로토콜에 넣으면 핸들러를 추가할 때마다 양쪽을 고쳐야 한다.
-// 버전 번호만 올린다.
+// hub 는 '뭔가 바뀌었다'만 알린다(버전 번호). 클라이언트는 다시 불러온다.
 type hub struct {
 	version atomic.Uint64
 	mu      sync.Mutex
@@ -21,14 +17,12 @@ type hub struct {
 	closed  bool
 }
 
-// perUserSubs는 한 사용자가 열 수 있는 스트림 수다. 탭 여러 개는 정상이지만
-// 멈춘 클라이언트가 고루틴을 무한정 쌓는 건 막는다.
+// perUserSubs 는 사용자당 스트림 수 상한(멈춘 클라이언트의 고루틴 누적 방지).
 const perUserSubs = 5
 
 func newHub() *hub { return &hub{subs: map[uint64]chan uint64{}} }
 
-// Broadcast는 버전을 올리고 구독자를 깨운다. 채널이 막혀 있으면 건너뛴다 —
-// 어차피 다음 알림이 따라잡는다.
+// Broadcast 는 버전을 올리고 구독자를 깨운다. 채널이 막혀 있으면 건너뛴다.
 func (h *hub) Broadcast() {
 	v := h.version.Add(1)
 	h.mu.Lock()
@@ -63,8 +57,7 @@ func (h *hub) unsubscribe(id uint64) {
 	}
 }
 
-// Close는 모든 스트림을 끝낸다. srv.Shutdown 이 핸들러가 돌아오기를 기다리므로
-// 그 전에 불러야 종료가 5초 마감에 걸리지 않는다.
+// Close 는 모든 스트림을 끝낸다. Shutdown 전에 불러야 5초 마감에 안 걸린다.
 func (h *hub) Close() {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -79,9 +72,7 @@ func (h *hub) Close() {
 }
 
 // GET /api/stream — 변경 알림(SSE).
-//
-// 30초마다 끊기던 이유: http.Server 의 WriteTimeout 이 slowloris 대비로 30초다.
-// 그 값을 전역에서 풀면 다른 라우트가 노출되므로, 이 연결의 마감만 해제한다.
+// 서버 WriteTimeout(30초)을 이 연결에서만 푼다.
 func (s *Server) stream(w http.ResponseWriter, r *http.Request) {
 	rc := http.NewResponseController(w)
 	if err := rc.SetWriteDeadline(time.Time{}); err != nil {
@@ -105,12 +96,11 @@ func (s *Server) stream(w http.ResponseWriter, r *http.Request) {
 	h.Set("X-Accel-Buffering", "no")
 	w.WriteHeader(http.StatusOK)
 
-	// EventSource 는 서버가 정상 종료하면 자동 재연결하지 않는다 — 재시도
-	// 간격을 알려두고, 클라이언트도 직접 재연결한다.
+	// EventSource 는 서버가 정상 종료하면 재연결하지 않는다 — retry 를 알리고 클라이언트도 직접 재연결한다.
 	fmt.Fprint(w, "retry: 3000\n\n")
 	_ = rc.Flush()
 
-	// 유휴 TCP 연결은 인그레스에서 1분쯤 뒤에 끊긴다. 25초마다 주석을 보낸다.
+	// 유휴 연결은 인그레스에서 1분쯤 뒤 끊긴다. 25초마다 핑.
 	ping := time.NewTicker(25 * time.Second)
 	defer ping.Stop()
 
@@ -140,10 +130,7 @@ func (s *Server) stream(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// broadcastOnWrite는 성공한 변경 요청 뒤에 알림을 보낸다.
-//
-// 핸들러마다 호출을 넣으면 새 핸들러에서 빠뜨린다. 미들웨어 한 곳에 두면
-// 앞으로 추가되는 라우트도 자동으로 포함된다.
+// broadcastOnWrite 는 성공한 변경 요청 뒤에 알린다(새 라우트도 자동 포함).
 func (s *Server) broadcastOnWrite(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		rec, ok := w.(*statusRecorder)

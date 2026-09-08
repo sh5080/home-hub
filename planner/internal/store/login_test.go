@@ -117,8 +117,7 @@ func TestIPWindowCapsAttempts(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now()
 
-	// 계정 잠금을 피하려고 매번 다른 이름을 쓰되 '있는 이름'인 척한다
-	// (AttemptWrongPass) — IP 상한만 시험한다.
+	// 매번 다른 '있는 이름'으로 시도해 IP 상한만 시험한다.
 	for i := 0; i < ipMax; i++ {
 		if g, _ := st.CheckLogin(ctx, "", "5.5.5.5", now); !g.Allowed {
 			t.Fatalf("blocked too early at %d", i)

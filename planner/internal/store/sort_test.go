@@ -5,8 +5,7 @@ import (
 	"testing"
 )
 
-// 정렬 기준 세 가지가 실제로 다른 순서를 내는지, 그리고 각 기준의 동점자
-// 처리가 의도대로인지.
+// 정렬 기준마다 다른 순서가 나오고 동점자 처리가 맞는지.
 func TestSortOrders(t *testing.T) {
 	st, by, cols := openTest(t)
 	ctx := context.Background()
@@ -46,8 +45,7 @@ func TestSortOrders(t *testing.T) {
 	eq(t, names(SortPriority), []string{"마감없음-별3", "오늘저녁-별2", "내일-별1", "오늘아침-별0"})
 }
 
-// 마감에 시각이 들어가도 날짜 경계 범위 쿼리가 그대로 동작해야 한다.
-// 이게 깨지면 캘린더와 /api/today가 조용히 항목을 놓친다.
+// 마감에 시각이 붙어도 날짜 경계 범위 쿼리가 동작해야 한다.
 func TestDatetimeDueStillMatchesDateRange(t *testing.T) {
 	st, by, cols := openTest(t)
 	ctx := context.Background()
@@ -164,8 +162,7 @@ func TestStarsAfter(t *testing.T) {
 	}
 }
 
-// 역순. 방향을 뒤집어도 "마감 없는 것은 뒤"는 유지돼야 한다 — 날짜 없는
-// 카드가 맨 앞에 몰리면 목록을 읽을 수 없다.
+// 역순에서도 마감 없는 건 뒤.
 func TestSortDescending(t *testing.T) {
 	st, by, cols := openTest(t)
 	ctx := context.Background()
@@ -203,7 +200,6 @@ func TestSortDescending(t *testing.T) {
 	eq(t, names(SortPriority, Desc), []string{"오늘아침-별0", "내일-별1", "오늘저녁-별2", "마감없음-별3"})
 	// 수동 역순: 만든 순서의 반대.
 	eq(t, names(SortManual, Desc), []string{"오늘저녁-별2", "오늘아침-별0", "내일-별1", "마감없음-별3"})
-	// 오름차순은 그대로.
 	eq(t, names(SortTime, Asc), []string{"오늘아침-별0", "오늘저녁-별2", "내일-별1", "마감없음-별3"})
 }
 
