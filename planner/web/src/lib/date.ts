@@ -1,5 +1,5 @@
-// 날짜 유틸. 서버는 타임존 없는 로컬 문자열('YYYY-MM-DD', 'YYYY-MM-DDTHH:MM')을 쓴다.
-// 여기서도 Date 객체는 로컬 시각으로만 다루고 UTC 변환은 절대 하지 않는다.
+// 서버는 타임존 없는 로컬 문자열('YYYY-MM-DD', 'YYYY-MM-DDTHH:MM')을 쓴다.
+// Date 는 로컬 시각으로만 다루고 UTC 변환은 하지 않는다.
 
 export function pad(n: number) {
   return n < 10 ? `0${n}` : String(n)
@@ -31,14 +31,7 @@ export function addDays(s: string, n: number) {
   return toDateStr(d)
 }
 
-/**
- * 저장 형식과 표시 순서가 다르다.
- *
- *   저장(루틴 weekdays_mask): ISO — bit0=월 … bit6=일
- *   표시: 일월화수목금토 — 한국 달력 관행
- *
- * 마스크를 바꾸면 기존 데이터를 마이그레이션해야 하므로 표시만 돌린다.
- */
+/** 저장(weekdays_mask)은 ISO(bit0=월), 표시는 일월화수목금토. 표시만 돌린다. */
 
 /** ISO 요일 인덱스: 월=0 … 일=6. 저장 마스크의 비트 번호다. */
 export function isoWeekday(s: string) {
@@ -90,20 +83,18 @@ export function hasTime(s: string) {
   return s.length > 10
 }
 
-/** 시각을 오전/오후로 태깅. 정확한 시:분은 상세 페이지에서만 보여준다. */
+/** 오전/오후 태그. */
 export function ampm(s: string) {
   if (!hasTime(s)) return ''
   return Number(s.slice(11, 13)) < 12 ? '오전' : '오후'
 }
 
-/** 목록에 쓰는 마감 표기: "내일 오후" 처럼 날짜 + 오전/오후 */
 export function fmtDue(s: string) {
   const label = dueLabel(s)
   const t = ampm(s)
   return t ? `${label} ${t}` : label
 }
 
-/** 마감일 상대 표기 */
 export function dueLabel(s: string) {
   const diff = Math.round((fromDateStr(s).getTime() - fromDateStr(today()).getTime()) / 86400000)
   if (diff === 0) return '오늘'
@@ -112,4 +103,52 @@ export function dueLabel(s: string) {
   if (diff < 0) return `${-diff}일 지남`
   if (diff < 7) return `${diff}일 후`
   return `${fromDateStr(s).getMonth() + 1}/${fromDateStr(s).getDate()}`
+}
+
+/** unix 초 → '9월 25일'. 해가 다르면 연도까지 붙인다. */
+export function fmtStamp(unix: number) {
+  const d = new Date(unix * 1000)
+  const y = d.getFullYear() === new Date().getFullYear() ? '' : `${d.getFullYear()}년 `
+  return `${y}${d.getMonth() + 1}월 ${d.getDate()}일`
+}
+
+/** 태어난 날부터의 일수(태어난 날 = D+0, 이유식 저장 기준). */
+export function daysSince(birth: string, from = today()) {
+  const a = fromDateStr(birth).getTime()
+  const b = fromDateStr(from).getTime()
+  return Math.round((b - a) / 86_400_000)
+}
+
+/** 만 나이. */
+export function ageOf(birth: string, from = today()) {
+  const b = fromDateStr(birth)
+  const f = fromDateStr(from)
+  let age = f.getFullYear() - b.getFullYear()
+  const md = (d: Date) => (d.getMonth() + 1) * 100 + d.getDate()
+  if (md(f) < md(b)) age--
+  return age
+}
+
+/**
+ * 생후 며칠째 — 태어난 날이 1일(백일 세는 방식). 저장은 D+0 이라 표시할 때만 +1 한다.
+ * 두 기준이 섞이지 않게 반드시 이 함수를 거친다.
+ */
+export function lifeDay(dday: number) {
+  return `생후 ${dday + 1}일`
+}
+
+export function lifeDayOf(birth: string, from = today()) {
+  return lifeDay(daysSince(birth, from))
+}
+
+/** 원 단위, 쉼표. 12,345,678원 */
+export function fmtWon(n: number) {
+  return `${Math.round(n).toLocaleString('ko-KR')}원`
+}
+/** 짧게: 1.2억, 345만 */
+export function fmtWonShort(n: number) {
+  const a = Math.abs(n), sign = n < 0 ? '-' : ''
+  if (a >= 1e8) return `${sign}${(a / 1e8).toFixed(a >= 1e9 ? 0 : 1)}억`
+  if (a >= 1e4) return `${sign}${Math.round(a / 1e4).toLocaleString('ko-KR')}만`
+  return `${sign}${Math.round(a).toLocaleString('ko-KR')}`
 }

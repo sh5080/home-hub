@@ -1,5 +1,5 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { api, type BFFood, type BFProfile, type BFRangeData, type BFStockView, type SearchResult, type Board, type BoardDetail, type Card, type Routine, type User } from '../api'
+import { useMutation, useQuery, useQueryClient, useInfiniteQuery } from '@tanstack/react-query'
+import { api, type BFChild, type BFFood, type BFRangeData, type BFStockView, type SearchAll, type Board, type BoardDetail, type Card, type Routine, type User, type DiaryEntry, type CareDay, type CareKind, type CareLog, type FinOverview, type FinFormat} from '../api'
 
 export function useMe() {
   return useQuery({ queryKey: ['me'], queryFn: () => api.get<User>('/api/me'), staleTime: Infinity })
@@ -51,16 +51,17 @@ export function useRoutineChecks(from: string, to: string) {
   })
 }
 
-/** 캘린더는 별도 데이터가 아니라 날짜가 있는 카드를 기간으로 본 것이다. */
 export interface CalendarData {
   cards: Card[]
+  /** 일기가 있는 날짜 — 격자에 점 하나로 표시한다 */
+  diary_dates: string[]
 }
 
 export function useCalendar(from: string, to: string) {
   return useQuery({ queryKey: ['calendar', from, to], queryFn: () => api.get<CalendarData>(`/api/calendar?from=${from}&to=${to}`) })
 }
 
-/** 변경 후 관련 쿼리를 통째로 무효화하는 뮤테이션 헬퍼. 단순함이 우선. */
+/** 변경 후 관련 쿼리를 통째로 무효화하는 뮤테이션 헬퍼. */
 export function useInvalidating<TArgs, TResult = unknown>(fn: (args: TArgs) => Promise<TResult>, keys: readonly (string | number)[][]) {
   const qc = useQueryClient()
   return useMutation<TResult, Error, TArgs>({
@@ -74,35 +75,94 @@ export function useSearch(q: string) {
   const term = q.trim()
   return useQuery({
     queryKey: ['search', term],
-    queryFn: () => api.get<SearchResult[]>(`/api/search?q=${encodeURIComponent(term)}`),
+    queryFn: () => api.get<SearchAll>(`/api/search?q=${encodeURIComponent(term)}`),
     enabled: term !== '',
     staleTime: 30_000,
   })
 }
 
-// --- 이유식 ---
 
-/** 날짜 구간의 식단. 서버가 D+n 으로 저장하고 날짜로 답한다. */
-export function useBabyfood(from: string, to: string) {
+/** 아이를 안 주면 대상이 한 명일 때만 서버가 고른다. */
+export function useBabyfood(from: string, to: string, child?: number) {
+  const q = child ? `&child=${child}` : ''
   return useQuery({
-    queryKey: ['babyfood', from, to],
-    queryFn: () => api.get<BFRangeData>(`/api/babyfood?from=${from}&to=${to}`),
+    queryKey: ['babyfood', from, to, child ?? 0],
+    queryFn: () => api.get<BFRangeData>(`/api/babyfood?from=${from}&to=${to}${q}`),
   })
 }
 
-/** 먹어본 음식 전체. 100종 남짓이라 한 번에 받아 화면에서 나눈다. */
-export function useBFFoods() {
-  return useQuery({ queryKey: ['babyfood-foods'], queryFn: () => api.get<BFFood[]>('/api/babyfood/foods') })
+export function useBFChildren() {
+  return useQuery({ queryKey: ['babyfood', 'children'], queryFn: () => api.get<BFChild[]>('/api/babyfood/children') })
 }
 
-export function useBFProfile() {
-  return useQuery({ queryKey: ['babyfood', 'profile'], queryFn: () => api.get<BFProfile>('/api/babyfood/profile') })
+export function useBFFoods(child?: number) {
+  const q = child ? `?child=${child}` : ''
+  return useQuery({ queryKey: ['babyfood-foods', child ?? 0], queryFn: () => api.get<BFFood[]>(`/api/babyfood/foods${q}`) })
 }
 
-/** days를 주면 설정을 바꾸지 않고 그 기간으로만 계산해 본다. */
-export function useBFStock(days?: number) {
+
+
+/** days 를 주면 설정을 바꾸지 않고 그 기간으로만 계산한다. */
+export function useBFStock(days?: number, child?: number) {
+  const qs = [days ? `days=${days}` : '', child ? `child=${child}` : ''].filter(Boolean).join('&')
   return useQuery({
-    queryKey: ['babyfood-stock', days ?? 0],
-    queryFn: () => api.get<BFStockView>(`/api/babyfood/stock${days ? `?days=${days}` : ''}`),
+    queryKey: ['babyfood-stock', days ?? 0, child ?? 0],
+    queryFn: () => api.get<BFStockView>(`/api/babyfood/stock${qs ? `?${qs}` : ''}`),
   })
+}
+
+export function useDiary(from?: string, to?: string) {
+  const qs = new URLSearchParams()
+  if (from) qs.set('from', from)
+  if (to) qs.set('to', to)
+  const suffix = qs.toString() ? `?${qs}` : ''
+  return useQuery({ queryKey: ['diary', from ?? '', to ?? ''], queryFn: () => api.get<DiaryEntry[]>(`/api/diary${suffix}`) })
+}
+
+export function useDiaryEntry(id: number, enabled = true) {
+  return useQuery({ queryKey: ['diary-entry', id], queryFn: () => api.get<DiaryEntry>(`/api/diary/${id}`), enabled })
+}
+
+const DIARY_PAGE = 40
+
+/** 다이어리 피드. 40장씩, 마지막 글의 (날짜, id) 커서로. 키가 'diary' 로 시작해 무효화가 닿는다. */
+export function useDiaryFeed() {
+  return useInfiniteQuery({
+    queryKey: ['diary', 'feed'],
+    initialPageParam: null as { date: string; id: number } | null,
+    queryFn: ({ pageParam }) => {
+      const qs = new URLSearchParams({ limit: String(DIARY_PAGE) })
+      if (pageParam) { qs.set('before_date', pageParam.date); qs.set('before_id', String(pageParam.id)) }
+      return api.get<DiaryEntry[]>(`/api/diary?${qs}`)
+    },
+    getNextPageParam: (last) => (last.length < DIARY_PAGE ? undefined : { date: last[last.length - 1].date, id: last[last.length - 1].id }),
+  })
+}
+
+export function useCareKinds() {
+  return useQuery({ queryKey: ['care-kinds'], queryFn: () => api.get<CareKind[]>('/api/care/kinds'), staleTime: Infinity })
+}
+export function useCareDay(date: string, child?: number) {
+  const qs = new URLSearchParams({ date })
+  if (child) qs.set('child', String(child))
+  return useQuery({ queryKey: ['care', date, child ?? 0], queryFn: () => api.get<CareDay>(`/api/care?${qs}`) })
+}
+export function useCareLast(child?: number) {
+  const qs = child ? `?child=${child}` : ''
+  return useQuery({ queryKey: ['care-last', child ?? 0], queryFn: () => api.get<Record<string, CareLog>>(`/api/care/last${qs}`), refetchInterval: 60_000 })
+}
+
+export function useFinance(owner: number, month?: string) {
+  const qs = new URLSearchParams({ owner: String(owner) })
+  if (month) qs.set('month', month)
+  // 달만 바꿀 땐 받는 동안 이전 화면을 유지한다(뼈대로 바뀌면 페이지가 짧아져 스크롤이 튄다). 사람을 바꾸면 비운다.
+  return useQuery({
+    queryKey: ['finance', owner, month ?? ''],
+    queryFn: () => api.get<FinOverview>(`/api/finance/overview?${qs}`),
+    placeholderData: (prev, prevQuery) => (prevQuery?.queryKey[1] === owner ? prev : undefined),
+  })
+}
+
+export function useFinFormat() {
+  return useQuery({ queryKey: ['finance', 'format'], queryFn: () => api.get<FinFormat>('/api/finance/format'), staleTime: Infinity })
 }

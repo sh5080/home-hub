@@ -1,10 +1,7 @@
-// Package store is the SQLite persistence layer for the planner.
+// Package store 는 플래너의 SQLite 저장소다.
 //
-// One rule governs every method here: the pool holds exactly ONE connection
-// (SetMaxOpenConns(1)), so a method that already holds a *sql.Tx must never
-// call db.Query/db.Exec — it would wait forever for a second connection.
-// Methods therefore take either the *Store (auto-commit) or an explicit *sql.Tx,
-// never both.
+// 커넥션이 정확히 하나(SetMaxOpenConns(1))다. *sql.Tx 를 쥔 채 db.Query/Exec 를
+// 부르면 두 번째 커넥션을 영원히 기다린다 — tx 전에 읽거나 tx 로만 읽는다.
 package store
 
 import (
@@ -28,8 +25,7 @@ import (
 //go:embed migrations/*.sql
 var migrationFS embed.FS
 
-// ValidationError marks bad caller input (HTTP 400), as opposed to a driver
-// failure (HTTP 500). Handlers distinguish the two with errors.As.
+// ValidationError 는 입력 오류(400). 드라이버 오류(500)와 errors.As 로 구분한다.
 type ValidationError struct{ Msg string }
 
 func (e *ValidationError) Error() string { return e.Msg }
@@ -38,14 +34,13 @@ func invalid(msg string) error { return &ValidationError{Msg: msg} }
 
 // Store wraps the single-connection SQLite handle.
 type Store struct {
-	db    *sql.DB
-	path  string
-	quota int64 // 0이면 DefaultQuota
+	db        *sql.DB
+	path      string
+	quota     int64 // 0이면 DefaultQuota
+	finFormat *FinFormat
 }
 
-// Open opens (creating if needed) the database at dir/planner.db and applies
-// pending migrations. WAL + NORMAL sync is the right trade for an SD card:
-// durable against an app crash, may lose the last transaction on power loss.
+// Open 은 dir/planner.db 를 열고 마이그레이션을 적용한다. WAL + NORMAL.
 func Open(dir string) (*Store, error) {
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return nil, fmt.Errorf("create data dir: %w", err)
@@ -108,11 +103,9 @@ type AppliedMigration struct {
 	Name      string
 	Checksum  string
 	AppliedAt int64
-	// Missing is true when the DB has this version but this binary doesn't
-	// carry the file — i.e. the binary is older than the database.
+	// Missing: DB 에는 있는데 이 바이너리에 파일이 없다(바이너리가 더 오래됨).
 	Missing bool
-	// Modified is true when the embedded file no longer matches what was
-	// applied — someone edited a shipped migration. Open refuses to start.
+	// Modified: 적용된 마이그레이션 파일이 바뀌었다. Open 이 기동을 거부한다.
 	Modified bool
 }
 
@@ -156,9 +149,8 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
   applied_at INTEGER NOT NULL
 )`
 
-// readApplied returns schema_migrations keyed by version, creating the table
-// on first use. A database created by the earlier PRAGMA user_version scheme
-// is adopted: its applied versions are recorded with the current checksums.
+// readApplied 는 schema_migrations 를 버전별로 준다(없으면 만들고,
+// user_version 시절 DB 는 현재 체크섬으로 받아들인다).
 func readApplied(db *sql.DB, migs []Migration) (map[int]AppliedMigration, error) {
 	if _, err := db.Exec(schemaMigrationsDDL); err != nil {
 		return nil, fmt.Errorf("create schema_migrations: %w", err)
@@ -200,13 +192,8 @@ func readApplied(db *sql.DB, migs []Migration) (map[int]AppliedMigration, error)
 	return out, rows.Err()
 }
 
-// migrate applies every embedded migration the database hasn't seen, in
-// version order, each in its own transaction, recording its checksum.
-//
-// It refuses to start if an already-applied migration's file has changed:
-// editing a shipped migration silently forks the schema between machines.
-// Write a new NNNN file instead. A database ahead of the binary (versions
-// with no file) is tolerated so an older CLI binary can still run.
+// migrate 는 아직 안 본 마이그레이션을 버전 순서로 하나씩 tx 로 적용한다.
+// 적용된 파일이 바뀌었으면 거부한다 — 고치지 말고 새 NNNN 파일을 쓴다.
 func (s *Store) migrate() error {
 	migs, err := embeddedMigrations()
 	if err != nil {
@@ -254,8 +241,7 @@ func (s *Store) migrate() error {
 	return nil
 }
 
-// Status reports applied and pending migrations for dir WITHOUT applying
-// anything — for `planner migrate status`.
+// Status 는 적용 없이 적용/대기 목록만 준다(planner migrate status).
 func Status(dir string) (applied []AppliedMigration, pending []Migration, err error) {
 	migs, err := embeddedMigrations()
 	if err != nil {
@@ -297,8 +283,7 @@ func Status(dir string) (applied []AppliedMigration, pending []Migration, err er
 	return applied, pending, nil
 }
 
-// SchemaDump returns the live schema (tables, indexes) as SQL, sorted, for
-// snapshot tests and documentation.
+// SchemaDump 는 스냅샷 테스트용 스키마 SQL.
 func (s *Store) SchemaDump(ctx context.Context) (string, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT type, name, sql FROM sqlite_master
@@ -320,8 +305,7 @@ func (s *Store) SchemaDump(ctx context.Context) (string, error) {
 	return b.String(), rows.Err()
 }
 
-// seed creates the default "할 일" board on an empty database so the todo
-// list exists on first login without a separate module.
+// seed 는 빈 DB 에 기본 '할 일' 보드를 만든다.
 func (s *Store) seed() error {
 	var n int
 	if err := s.db.QueryRow("SELECT count(*) FROM boards").Scan(&n); err != nil {
@@ -350,9 +334,7 @@ func (s *Store) seed() error {
 	return tx.Commit()
 }
 
-// backfillContent는 0003 이전에 만들어진 카드(content IS NULL)의 평문 설명을
-// 단락 문서로 옮긴다. SQL이 아니라 Go에서 하는 건 문서 JSON의 모양을 한 곳
-// (PlainToContent)에만 두기 위해서다. 멱등이라 매 기동 시 돌아도 안전하다.
+// backfillContent 는 content 가 NULL 인 카드의 평문을 단락 문서로 옮긴다(멱등).
 func (s *Store) backfillContent() error {
 	rows, err := s.db.Query(`SELECT id, description FROM cards WHERE content IS NULL`)
 	if err != nil {
@@ -388,10 +370,7 @@ func (s *Store) backfillContent() error {
 	return tx.Commit()
 }
 
-// backfillPriority는 노션에서 가져올 때 본문 콜아웃 텍스트로만 들어갔던
-// 중요도(⭐ 개수)를 priority 컬럼으로 복구한다. LIKE로 걸러서 깨끗한 DB에서는
-// 비용이 없고, 이미 값이 있는 카드는 건드리지 않아 멱등이다.
-// 콜아웃 자체는 지우지 않는다 — 분류와 메모가 거기 같이 들어 있다.
+// backfillPriority 는 노션 콜아웃의 ⭐ 개수를 priority 로 옮긴다(멱등, 콜아웃은 남긴다).
 func (s *Store) backfillPriority() error {
 	rows, err := s.db.Query(`SELECT id, content FROM cards WHERE priority = 0 AND content LIKE '%중요도:%'`)
 	if err != nil {
@@ -430,8 +409,7 @@ func (s *Store) backfillPriority() error {
 	return tx.Commit()
 }
 
-// starsAfter는 marker 바로 뒤에 이어지는 ⭐ 개수를 센다. 다음 구분자(·)나
-// 줄바꿈에서 멈춰, 본문 다른 곳의 별은 세지 않는다.
+// starsAfter 는 marker 바로 뒤의 ⭐ 개수를 센다(· 나 줄바꿈에서 멈춤).
 func starsAfter(text, marker string) int {
 	i := strings.Index(text, marker)
 	if i < 0 {
@@ -451,8 +429,7 @@ func starsAfter(text, marker string) int {
 	return min(n, maxPriority)
 }
 
-// Backup writes a consistent snapshot to dst using VACUUM INTO — safe to run
-// while the server is live, and the output is a compacted single file.
+// Backup 은 VACUUM INTO 스냅샷(서버가 도는 중에도 안전).
 func (s *Store) Backup(ctx context.Context, dst string) error {
 	if _, err := s.db.ExecContext(ctx, "VACUUM INTO ?", dst); err != nil {
 		return fmt.Errorf("vacuum into: %w", err)
@@ -462,3 +439,30 @@ func (s *Store) Backup(ctx context.Context, dst string) error {
 
 // Ping is the health probe.
 func (s *Store) Ping(ctx context.Context) error { return s.db.PingContext(ctx) }
+
+// AcceptChecksum 은 이미 적용된 마이그레이션의 체크섬을 이 빌드의 것으로 바꾼다.
+// 주석만 고친 경우에만 쓴다 — SQL 이 바뀌었으면 새 마이그레이션을 만들어야 한다.
+func AcceptChecksum(dir, name string) (old, now string, err error) {
+	migs, err := embeddedMigrations()
+	if err != nil {
+		return "", "", err
+	}
+	for _, m := range migs {
+		if m.Name == name {
+			now = m.Checksum
+		}
+	}
+	if now == "" {
+		return "", "", fmt.Errorf("이 빌드에 %s 가 없어요", name)
+	}
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(dir, "planner.db")+"?_pragma=busy_timeout(5000)")
+	if err != nil {
+		return "", "", err
+	}
+	defer db.Close()
+	if err := db.QueryRow(`SELECT checksum FROM schema_migrations WHERE name=?`, name).Scan(&old); err != nil {
+		return "", "", fmt.Errorf("%s 적용 기록: %w", name, err)
+	}
+	_, err = db.Exec(`UPDATE schema_migrations SET checksum=? WHERE name=?`, now, name)
+	return old, now, err
+}

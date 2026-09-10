@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/sh5080/home-hub/planner/internal/auth"
+	"github.com/sh5080/home-hub/planner/internal/notify"
 	"github.com/sh5080/home-hub/planner/internal/store"
 	"github.com/sh5080/home-hub/planner/internal/webui"
 )
@@ -17,24 +18,24 @@ type Server struct {
 	st  *store.Store
 	log *slog.Logger
 	dev bool // drops the Secure cookie flag so Vite's http://localhost works
-	// bcrypt는 Pi에서 한 번에 ~1초를 쓴다. 동시 실행을 묶어 CPU 고갈을 막는다.
+	// bcrypt 는 Pi 에서 ~1초. 동시 실행을 묶는다.
 	bcrypt bcryptLimiter
-	// 변경 알림(SSE) 허브.
-	hub *hub
+	hub    *hub
+	// 사진 디코딩은 한 번에 하나(메모리).
+	mediaSem chan struct{}
+	// 웹푸시. 1분 알림 루프도 이것이 돈다.
+	push *notify.Sender
 }
 
-// New builds the full handler: /api/* routes, then the SPA. Route order matters:
-// the /api/ catch-all 404 is registered so an unknown API path can never fall
-// through to index.html.
+// New 는 /api/* 다음 SPA 순서로 묶는다. /api/ catch-all 404 가 먼저라 모르는 API 경로가 index.html 로 가지 않는다.
 func New(st *store.Store, log *slog.Logger, dev bool) http.Handler {
 	h, _ := NewWithHub(st, log, dev)
 	return h
 }
 
-// NewWithHub는 핸들러와 함께 알림 허브를 돌려준다. 종료 시 스트림을 먼저
-// 끊어야 Shutdown 이 마감을 다 쓰지 않는다.
+// NewWithHub 는 알림 허브를 같이 준다. 종료 시 스트림을 먼저 끊어야 Shutdown 마감에 안 걸린다.
 func NewWithHub(st *store.Store, log *slog.Logger, dev bool) (http.Handler, interface{ Close() }) {
-	s := &Server{st: st, log: log, dev: dev, bcrypt: newBcryptLimiter(), hub: newHub()}
+	s := &Server{st: st, log: log, dev: dev, bcrypt: newBcryptLimiter(), hub: newHub(), mediaSem: make(chan struct{}, 1), push: notify.New(st, log)}
 	devCSP = dev
 	mux := http.NewServeMux()
 
@@ -42,30 +43,39 @@ func NewWithHub(st *store.Store, log *slog.Logger, dev bool) (http.Handler, inte
 	mux.HandleFunc("GET /api/healthz", s.healthz)
 	mux.HandleFunc("POST /api/login", s.login)
 
-	// --- authenticated ---
-	// Auth-gated routes live on their own mux so one middleware covers them
-	// all; the outer mux forwards every /api/ path we register here.
+	// --- authenticated --- (인증 mux 하나에 모으고 바깥 mux 가 경로를 넘긴다)
 	authed := http.NewServeMux()
 	authed.HandleFunc("POST /api/logout", s.logout)
 	authed.HandleFunc("GET /api/me", s.me)
 	authed.HandleFunc("GET /api/users", s.listUsers)
 	authed.HandleFunc("POST /api/users", s.createUser)
 	authed.HandleFunc("POST /api/users/{id}/password", s.setPassword)
+	authed.HandleFunc("PATCH /api/users/{id}/birthdate", s.setBirthDate)
 	s.registerBoards(authed)
 	s.registerCalendar(authed)
 	s.registerRoutines(authed)
 	s.registerBabyfood(authed)
+	s.registerDiary(authed)
+	s.registerMedia(authed)
+	s.registerCare(authed)
+	s.registerNotify(authed)
+	s.registerFinance(authed)
 	authed.HandleFunc("GET /api/stream", s.stream)
 	authed.HandleFunc("GET /api/storage", s.storage)
 	authed.HandleFunc("GET /api/search", s.search)
 	authed.HandleFunc("/", notFound) // inner mux must also answer JSON, never the stdlib HTML 404
-	// 변경 알림은 미들웨어 한 곳에서 — 핸들러마다 넣으면 빠뜨린다.
+	// 변경 알림은 미들웨어 한 곳에서.
 	gated := auth.Middleware(st, s.broadcastOnWrite(authed))
+	// 바깥 mux 에도 경로를 얹어야 인증 mux 까지 간다. 빠뜨리면 catch-all 404 가 먼저 잡는다.
 	for _, p := range []string{
 		"/api/logout", "/api/me", "/api/users", "/api/users/",
 		"/api/boards", "/api/boards/", "/api/columns/", "/api/cards/",
 		"/api/routines", "/api/routines/", "/api/calendar", "/api/today", "/api/stream", "/api/storage", "/api/search",
 		"/api/babyfood", "/api/babyfood/",
+		"/api/diary", "/api/diary/", "/api/media", "/api/media/", "/api/care", "/api/care/",
+		"/api/push/", "/api/notify/", "/api/finance/",
+		// /api/ 밖의 유일한 인증 경로. SPA 핸들러보다 먼저 잡혀야 한다.
+		"/media/",
 	} {
 		mux.Handle(p, gated)
 	}
@@ -76,7 +86,22 @@ func NewWithHub(st *store.Store, log *slog.Logger, dev bool) (http.Handler, inte
 	// --- SPA (must be last) ---
 	mux.Handle("/", webui.Handler())
 
-	return securityHeaders(s.logRequests(mux)), s.hub
+	// 알림 루프. Close 때 같이 멈춘다.
+	ctx, cancel := context.WithCancel(context.Background())
+	go s.push.Run(ctx)
+	return securityHeaders(s.logRequests(mux)), closers{s.hub, closeFunc(cancel)}
+}
+
+type closeFunc func()
+
+func (f closeFunc) Close() { f() }
+
+type closers []interface{ Close() }
+
+func (cs closers) Close() {
+	for _, c := range cs {
+		c.Close()
+	}
 }
 
 func notFound(w http.ResponseWriter, _ *http.Request) {
@@ -93,7 +118,7 @@ func (s *Server) healthz(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-// logRequests is deliberately terse — the Pi journal is capped at 50 MB.
+// logRequests 는 일부러 짧다 — Pi 저널이 50MB 로 묶여 있다.
 func (s *Server) logRequests(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()

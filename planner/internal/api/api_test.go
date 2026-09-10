@@ -22,8 +22,7 @@ type client struct {
 	t   *testing.T
 	srv *httptest.Server
 	jar []*http.Cookie
-	// st는 HTTP로 만들 수 없는 상태(이유식 식단 시드 등)를 테스트가 직접
-	// 넣을 수 있게 열어둔 것이다.
+	// st 는 HTTP 로 만들 수 없는 상태를 테스트가 직접 넣을 때 쓴다.
 	st *store.Store
 }
 
@@ -71,8 +70,7 @@ func (c *client) do(method, path string, body any, out any) int {
 	}
 	raw, _ := io.ReadAll(res.Body)
 	if out != nil && len(raw) > 0 {
-		// Unmarshal leaves fields absent from the JSON untouched, so a reused
-		// target would carry stale values. Zero it first.
+		// Unmarshal 은 없는 필드를 그대로 두므로 먼저 비운다.
 		v := reflect.ValueOf(out).Elem()
 		v.Set(reflect.Zero(v.Type()))
 		if err := json.Unmarshal(raw, out); err != nil {
@@ -92,11 +90,9 @@ func (c *client) must(method, path string, body any, out any, want int) {
 func TestSmoke(t *testing.T) {
 	c := newClient(t)
 
-	// unauthenticated
 	c.must("GET", "/api/me", nil, nil, 401)
 	c.must("GET", "/api/boards", nil, nil, 401)
 
-	// login
 	var me map[string]any
 	c.must("POST", "/api/login", map[string]string{"name": "테스트1", "password": "wrong"}, nil, 401)
 	c.must("POST", "/api/login", map[string]string{"name": "테스트1", "password": "pass1234"}, &me, 200)
@@ -105,14 +101,12 @@ func TestSmoke(t *testing.T) {
 	}
 	c.must("GET", "/api/me", nil, &me, 200)
 
-	// seed board exists
 	var boards []store.Board
 	c.must("GET", "/api/boards", nil, &boards, 200)
 	if len(boards) != 1 || boards[0].Name != "할 일" {
 		t.Fatalf("boards = %+v", boards)
 	}
 
-	// board detail with 3 columns
 	var d store.BoardDetail
 	c.must("GET", "/api/boards/1", nil, &d, 200)
 	if len(d.Columns) != 3 {
@@ -203,7 +197,6 @@ func TestSmoke(t *testing.T) {
 	c.must("GET", "/api/whatever", nil, nil, 404)
 	c.must("GET", "/api/boards/1/whatever", nil, nil, 404)
 
-	// logout kills the session
 	c.must("POST", "/api/logout", nil, nil, 204)
 	c.must("GET", "/api/me", nil, nil, 401)
 }
@@ -283,8 +276,7 @@ func itoa(i int64) string {
 	return string(b)
 }
 
-// 동시 로그인 폭주가 bcrypt를 병렬로 태우지 못하는지. 레이트리밋은 '확인 →
-// bcrypt → 기록' 순서라 동시 요청을 못 막는다 — 세마포어가 그 축을 맡는다.
+// 동시 로그인이 bcrypt 를 병렬로 태우지 못하는지(세마포어).
 func TestConcurrentLoginsAreThrottled(t *testing.T) {
 	c := newClient(t)
 	const n = 12
@@ -326,8 +318,7 @@ func TestSecurityHeaders(t *testing.T) {
 	}
 }
 
-// 카드 상세 + 본문(블록 문서) 왕복. 서버가 description을 파생하는지,
-// 허용하지 않는 블록을 거절하는지가 핵심이다.
+// 카드 본문 왕복: description 파생과 허용 안 된 블록 거절.
 func TestCardDetailAndContent(t *testing.T) {
 	c := newClient(t)
 	c.must("POST", "/api/login", map[string]string{"name": "테스트1", "password": "pass1234"}, nil, 200)
@@ -379,7 +370,7 @@ func TestCardDetailAndContent(t *testing.T) {
 	c.must("GET", "/api/cards/99999", nil, nil, 404)
 }
 
-// 변경이 SSE로 흘러나오는지. 이게 깨지면 화면이 조용히 30초 낡은 채로 남는다.
+// 변경이 SSE 로 흘러나오는지.
 func TestStreamNotifiesOnWrite(t *testing.T) {
 	c := newClient(t)
 	c.must("POST", "/api/login", map[string]string{"name": "테스트1", "password": "pass1234"}, nil, 200)
@@ -522,30 +513,36 @@ func TestBabyfoodAPI(t *testing.T) {
 	c.must("GET", "/api/babyfood/profile", nil, nil, 401)
 	c.must("POST", "/api/login", map[string]string{"name": "테스트1", "password": "pass1234"}, nil, 200)
 
+	// 대상이 없으면 재고를 계산할 수 없다.
+	c.must("GET", "/api/babyfood/stock", nil, nil, 400)
+
+	// 아이를 가족으로 만들고 생년월일을 넣어야 대상이 된다.
+	var kid store.User
+	c.must("POST", "/api/users", map[string]string{"name": "테스트아기", "password": "pass9999"}, &kid, 201)
+	c.must("POST", "/api/babyfood/children", map[string]any{"user_id": kid.ID, "horizon_days": 2}, nil, 400)
+
+	birth := time.Now().AddDate(0, 0, -100).Format("2006-01-02")
+	c.must("PATCH", "/api/users/"+itoa(kid.ID)+"/birthdate", map[string]any{"birth_date": birth}, nil, 200)
+
+	var kids []store.BFChild
+	c.must("POST", "/api/babyfood/children", map[string]any{"user_id": kid.ID, "horizon_days": 2}, &kids, 200)
+	if len(kids) != 1 || kids[0].TodayDDay != 100 {
+		t.Fatalf("아이 = %+v", kids)
+	}
+
 	f, err := store.ParseBFPlan([]byte(bfTestPlan))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.st.BFImport(context.Background(), f, nil, true, false, 0); err != nil {
+	if _, err := c.st.BFImport(context.Background(), kid.ID, f, nil, true, false, 0); err != nil {
 		t.Fatal(err)
-	}
-
-	// 생일 전에는 재고를 계산할 수 없다 — 날짜를 모르기 때문이다.
-	c.must("GET", "/api/babyfood/stock", nil, nil, 400)
-
-	// 생일을 넣으면 D+100 이 그 날짜가 된다.
-	birth := time.Now().AddDate(0, 0, -100).Format("2006-01-02")
-	var p store.BFProfile
-	c.must("PATCH", "/api/babyfood/profile", map[string]any{"birth_date": birth, "horizon_days": 2}, &p, 200)
-	if p.TodayDDay == nil || *p.TodayDDay != 100 {
-		t.Fatalf("today_dday = %v, want 100", p.TodayDDay)
 	}
 
 	from := birth
 	to := time.Now().AddDate(0, 0, 1).Format("2006-01-02")
 	var rng struct {
-		Profile store.BFProfile `json:"profile"`
-		Days    []store.BFDay   `json:"days"`
+		Children []store.BFChild `json:"children"`
+		Days     []store.BFDay   `json:"days"`
 	}
 	c.must("GET", "/api/babyfood?from="+from+"&to="+to, nil, &rng, 200)
 	if len(rng.Days) != 2 {
@@ -567,35 +564,59 @@ func TestBabyfoodAPI(t *testing.T) {
 		t.Fatal("되돌렸는데 '수정됨'이 남아 있다")
 	}
 
-	// 알레르기 반응·좋아함은 날짜가 아니라 재료에 붙는다.
+	// 알레르기 반응·좋아함은 그날 그 재료에 남고, 재료 목록이 그걸 모은다.
 	var foods []store.BFFood
 	c.must("GET", "/api/babyfood/foods", nil, &foods, 200)
 	have := map[string]bool{}
 	for _, f := range foods {
 		have[f.Name] = true
 	}
-	// 위에서 고칠 때 쓴 '다재료'도 재료 목록에 들어와 있다 — 식단에 없던
-	// 재료를 적어도 목록에서 사라지지 않아야 표시를 달 수 있다.
+	// 식단에 없던 '다재료'도 재료 목록에 있어야 표시를 달 수 있다.
 	for _, want := range []string{"베이스A", "가재료", "나재료", "다재료"} {
 		if !have[want] {
 			t.Fatalf("%s 가 재료 목록에 없다: %+v", want, foods)
 		}
 	}
-	var tagged store.BFFood
-	c.must("POST", "/api/babyfood/foods/tag", map[string]any{"name": "가재료", "reaction": true}, &tagged, 200)
-	if !tagged.Reaction || tagged.Liked {
-		t.Fatalf("reaction 만 켜야 한다: %+v", tagged)
+	// 기록은 날짜마다 남는다. 같은 재료라도 오늘과 내일이 따로다.
+	d100 := time.Now().Format("2006-01-02")
+	d101 := time.Now().AddDate(0, 0, 1).Format("2006-01-02")
+	var logged store.BFDay
+	c.must("POST", "/api/babyfood/logs",
+		map[string]any{"date": d100, "name": "가재료", "reaction": true}, &logged, 200)
+	if len(logged.Logs) != 1 || !logged.Logs[0].Reaction || logged.Logs[0].Liked {
+		t.Fatalf("reaction 만 켜야 한다: %+v", logged.Logs)
 	}
 	// 둘은 독립이다 — 좋아함을 켜도 반응은 그대로 남는다.
-	c.must("POST", "/api/babyfood/foods/tag", map[string]any{"name": "가재료", "liked": true}, &tagged, 200)
-	if !tagged.Reaction || !tagged.Liked {
-		t.Fatalf("둘 다 켜져 있어야 한다: %+v", tagged)
+	c.must("POST", "/api/babyfood/logs",
+		map[string]any{"date": d100, "name": "가재료", "liked": true}, &logged, 200)
+	if len(logged.Logs) != 1 || !logged.Logs[0].Reaction || !logged.Logs[0].Liked {
+		t.Fatalf("둘 다 켜져 있어야 한다: %+v", logged.Logs)
 	}
-	if tagged.FirstDDay == nil || *tagged.FirstDDay != 100 {
-		t.Fatalf("처음 나온 날 = %v, want 100", tagged.FirstDDay)
+	c.must("POST", "/api/babyfood/logs",
+		map[string]any{"date": d101, "name": "가재료", "liked": true}, &logged, 200)
+
+	// 재료 목록은 그 기록들을 모아 답한다.
+	c.must("GET", "/api/babyfood/foods", nil, &foods, 200)
+	var ga store.BFFood
+	for _, f := range foods {
+		if f.Name == "가재료" {
+			ga = f
+		}
 	}
-	c.must("POST", "/api/babyfood/foods/tag", map[string]any{"name": "없는재료", "liked": true}, nil, 404)
-	c.must("POST", "/api/babyfood/foods/tag", map[string]any{"name": "가재료"}, nil, 400)
+	if !ga.Reaction || !ga.Liked {
+		t.Fatalf("요약이 둘 다 잡아야 한다: %+v", ga)
+	}
+	if len(ga.LikedDates) != 2 {
+		t.Fatalf("좋아함이 이틀이어야 한다: %v", ga.LikedDates)
+	}
+	if ga.FirstDDay == nil || *ga.FirstDDay != 100 {
+		t.Fatalf("처음 나온 날 = %v, want 100", ga.FirstDDay)
+	}
+	// 그날 먹지 않는 재료, 바꿀 내용이 없는 요청.
+	c.must("POST", "/api/babyfood/logs",
+		map[string]any{"date": d100, "name": "없는재료", "liked": true}, nil, 404)
+	c.must("POST", "/api/babyfood/logs",
+		map[string]any{"date": d100, "name": "가재료"}, nil, 400)
 
 	// 재고: 실사 전에는 '모름', 실사하면 숫자가 된다.
 	var view store.BFStockView
@@ -634,24 +655,29 @@ func TestSearch(t *testing.T) {
 	c.must("POST", "/api/columns/"+itoa(col)+"/cards", map[string]any{"title": "소고기 장보기"}, nil, 201)
 	c.must("POST", "/api/columns/"+itoa(col)+"/cards", map[string]any{"title": "어린이집 상담"}, nil, 201)
 
-	var got []store.SearchResult
+	// 루틴도 같은 '찾기'에 걸려야 한다.
+	c.must("POST", "/api/routines", map[string]any{"title": "소고기 해동", "weekdays_mask": 127}, nil, 201)
+
+	var got store.SearchAll
 	// '고기' (두 글자 부분어)
 	c.must("GET", "/api/search?q=%EA%B3%A0%EA%B8%B0", nil, &got, 200)
-	if len(got) != 1 || got[0].Title != "소고기 장보기" {
-		t.Fatalf("검색 결과 = %+v", got)
+	if len(got.Cards) != 1 || got.Cards[0].Title != "소고기 장보기" {
+		t.Fatalf("카드 결과 = %+v", got.Cards)
 	}
-	if got[0].BoardName == "" || got[0].ColumnName == "" {
-		t.Fatalf("위치 정보가 없다: %+v", got[0])
+	if got.Cards[0].BoardName == "" || got.Cards[0].ColumnName == "" {
+		t.Fatalf("위치 정보가 없다: %+v", got.Cards[0])
+	}
+	if len(got.Routines) != 1 || got.Routines[0].Title != "소고기 해동" {
+		t.Fatalf("루틴 결과 = %+v", got.Routines)
 	}
 	// 빈 질의는 빈 목록이다 — 전체 목록이 쏟아지면 안 된다.
 	c.must("GET", "/api/search?q=", nil, &got, 200)
-	if len(got) != 0 {
-		t.Fatalf("빈 질의에 %d건", len(got))
+	if len(got.Cards) != 0 || len(got.Routines) != 0 || len(got.Foods) != 0 {
+		t.Fatalf("빈 질의에 결과가 있다: %+v", got)
 	}
 }
 
-// 홈의 '오늘 할 일'. 카드에 컬럼을 더할 때 이 경로의 Scan을 빠뜨리기 쉬운데,
-// 아무도 안 부르면 배포 후에야 500으로 드러난다.
+// 홈 '오늘 할 일'. 카드에 컬럼을 더할 때 이 경로의 Scan 을 빠뜨리기 쉽다.
 func TestTodayEndpoint(t *testing.T) {
 	c := newClient(t)
 	c.must("POST", "/api/login", map[string]string{"name": "테스트1", "password": "pass1234"}, nil, 200)
@@ -676,11 +702,41 @@ func TestTodayEndpoint(t *testing.T) {
 	if !titles["오늘 것"] {
 		t.Fatalf("오늘 것이 없다: %+v", got.Cards)
 	}
-	// 내일 것은 '앞으로 7일'이 맡는다. 둘 다에 나오면 같은 카드가 한 화면에
-	// 두 번 보이고, 위에서 잘린 것이 아래에만 보이는 모순이 생긴다.
+	// 내일 것은 '앞으로 7일'이 맡는다.
 	if titles["내일 것"] {
 		t.Fatal("내일 것이 오늘 할 일에 들어왔다")
 	}
 	c.must("GET", "/api/today", nil, nil, 400)
 	c.must("GET", "/api/today?date=어제", nil, nil, 400)
+}
+
+// 핸들러를 등록해도 바깥 mux 에 경로를 안 얹으면 404 가 된다.
+func TestEveryAPIGroupIsRouted(t *testing.T) {
+	c := newClient(t)
+	c.must("POST", "/api/login", map[string]string{"name": "테스트1", "password": "pass1234"}, nil, 200)
+	for _, path := range []string{
+		"/api/me", "/api/users", "/api/boards", "/api/calendar?from=2026-01-01&to=2026-01-02",
+		"/api/routines", "/api/today?date=2026-01-01", "/api/storage", "/api/search?q=x",
+		"/api/babyfood/children", "/api/diary", "/api/care/kinds", "/api/notify/rules", "/api/push/key", "/api/finance/overview",
+	} {
+		if code := c.do("GET", path, nil, nil); code == 404 {
+			t.Errorf("%s 가 404 다 — 바깥 mux 에 경로가 빠졌다", path)
+		}
+	}
+	// /media/ 는 인증 mux 로 가야 한다(SPA 의 '확장자 있으면 404' 규칙에 먼저 걸리면 안 된다).
+	res := c.raw("GET", "/media/"+strings.Repeat("a", 64)+".jpg", nil)
+	res.Body.Close()
+	if ct := res.Header.Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
+		t.Errorf("/media/ 가 인증 mux 로 가지 않았다: content-type %q", ct)
+	}
+}
+
+// 사진은 로그인 없이는 나가면 안 된다.
+func TestMediaRequiresLogin(t *testing.T) {
+	c := newClient(t)
+	res := c.raw("GET", "/media/"+strings.Repeat("a", 64)+".jpg", nil)
+	res.Body.Close()
+	if res.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("로그인 없는 /media/ = %d, want 401", res.StatusCode)
+	}
 }

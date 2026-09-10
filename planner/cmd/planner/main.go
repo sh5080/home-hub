@@ -1,17 +1,7 @@
-// planner — 단아네 플래너 (칸반 · 캘린더 · 주간 루틴).
+// planner — 단아네 플래너. 서브커맨드는 usage() 참고.
 //
-//	planner serve  [--listen 127.0.0.1:8090] [--data DIR] [--log LEVEL] [--dev]
-//	planner user add <name>     [--data DIR]   비밀번호는 터미널에서 입력
-//	planner user passwd <name>  [--data DIR]
-//	planner user del <name>     [--data DIR]
-//	planner user list           [--data DIR]
-//	planner backup [--out FILE] [--data DIR]   VACUUM INTO 스냅샷
-//	planner migrate status      [--data DIR]   적용/대기 마이그레이션 확인 (적용은 serve가 함)
-//	planner import notion <zip> [--board N] [--apply]  노션 export 가져오기 (기본 dry-run)
-//	planner babyfood import <파일.json> [--apply]      이유식 식단 데이터 넣기 (기본 dry-run)
-//
-// 데이터 디렉터리는 --data 또는 PLANNER_DATA. Pi에서 CLI는 서비스와 같은 사용자
-// (sh5080)로 실행해야 -wal/-shm 파일 소유권이 꼬이지 않는다.
+// 데이터 디렉터리는 --data 또는 PLANNER_DATA. Pi 에서 CLI 는 서비스와 같은 사용자(sh5080)로
+// 실행해야 -wal/-shm 소유권이 꼬이지 않는다.
 package main
 
 import (
@@ -24,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 	_ "time/tzdata" // static binary: carry zoneinfo so TZ=Asia/Seoul resolves without the OS db
@@ -49,6 +40,10 @@ func main() {
 		err = cmdMigrate(os.Args[2:])
 	case "import":
 		err = cmdImport(os.Args[2:])
+	case "diary":
+		err = cmdDiary(os.Args[2:])
+	case "care":
+		err = cmdCare(os.Args[2:])
 	case "babyfood":
 		err = cmdBabyfood(os.Args[2:])
 	case "-h", "--help", "help":
@@ -73,6 +68,8 @@ func usage() {
   planner migrate status [--data DIR]
   planner import notion <export.zip> [--board NAME] [--apply] [--data DIR]
   planner babyfood import <파일.json> [--track a,b] [--replace] [--apply] [--data DIR]
+  planner diary import <폴더>... --as <이름> [--child <이름>] [--apply] [--data DIR]   베이비타임 일기
+  planner care import <폴더>... --child <이름> --as <이름> [--apply] [--data DIR]    베이비타임 활동 기록
 `)
 }
 
@@ -121,6 +118,19 @@ func cmdServe(args []string) error {
 		return fmt.Errorf("open store: %w", err)
 	}
 	st.SetQuota(*quotaMB << 20)
+	// 재정 파일 규격(서비스 이름·시트 이름 등)은 저장소 밖 설정 파일에 둔다.
+	finPath := os.Getenv("PLANNER_FIN_FORMAT")
+	if finPath == "" {
+		finPath = filepath.Join(*data, "finance-format.json")
+	}
+	ff, err := store.LoadFinFormat(finPath)
+	if err != nil {
+		return fmt.Errorf("재정 규격: %w", err)
+	}
+	if ff == nil {
+		log.Info("finance format not configured; import disabled", "path", finPath)
+	}
+	st.SetFinFormat(ff)
 	defer st.Close()
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -131,25 +141,22 @@ func cmdServe(args []string) error {
 		Addr:              *listen,
 		Handler:           handler,
 		ReadHeaderTimeout: 5 * time.Second,
-		// slowloris 방지. bcrypt가 최대 ~3초(대기)+1초(해싱)이라 Write는 넉넉히 둔다.
+		// slowloris 방지. bcrypt 가 최대 ~4초라 Write 는 넉넉히.
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 30 * time.Second,
 		IdleTimeout:  90 * time.Second,
-		// Request contexts derive from ctx so in-flight handlers observe SIGTERM.
-		BaseContext: func(net.Listener) context.Context { return ctx },
+		BaseContext:  func(net.Listener) context.Context { return ctx },
 	}
 
 	go func() {
 		<-ctx.Done()
-		// 스트림을 먼저 끊는다 — Shutdown 은 핸들러가 돌아오기를 기다리므로
-		// 열린 SSE가 있으면 5초 마감을 그냥 다 쓴다.
+		// 스트림을 먼저 끊는다 — 열린 SSE 가 있으면 Shutdown 이 5초 마감을 다 쓴다.
 		hub.Close()
 		shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_ = srv.Shutdown(shutCtx)
 	}()
 
-	// Expired sessions only matter for table size; sweep hourly.
 	go func() {
 		t := time.NewTicker(time.Hour)
 		defer t.Stop()
