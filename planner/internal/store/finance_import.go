@@ -77,7 +77,7 @@ func formatErr(format string, a ...any) error {
 // ParseFinanceExport 는 파일을 읽어 스냅샷 항목과 거래를 낸다. filename 에서 기준일을 뽑고, 없으면 오늘.
 func ParseFinanceExport(data []byte, filename string, f *FinFormat) (FinParsed, error) {
 	if f == nil {
-		return FinParsed{}, invalid("재정 파일 규격이 설정되지 않았어요(PLANNER_FIN_FORMAT)")
+		return FinParsed{}, invalid("자산 파일 규격이 설정되지 않았어요(PLANNER_FIN_FORMAT)")
 	}
 	sheets, order, err := readXLSX(data)
 	if err != nil {

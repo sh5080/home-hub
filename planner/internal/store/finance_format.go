@@ -62,7 +62,7 @@ func (f *FinFormat) validate() error {
 		}
 	}
 	if len(miss) > 0 {
-		return fmt.Errorf("재정 규격 설정에 빠진 값: %s", strings.Join(miss, ", "))
+		return fmt.Errorf("자산 파일 규격 설정에 빠진 값: %s", strings.Join(miss, ", "))
 	}
 	return nil
 }

@@ -17,12 +17,20 @@ func (s *Server) registerFinance(m *http.ServeMux) {
 	m.HandleFunc("POST /api/finance/settings", s.financeSettings)
 	m.HandleFunc("POST /api/finance/fixed", s.financeFixed)
 	m.HandleFunc("POST /api/finance/income", s.financeIncome)
+	m.HandleFunc("POST /api/finance/regular", s.financeRegular)
 	m.HandleFunc("POST /api/finance/spend", s.financeSpend)
 	m.HandleFunc("POST /api/finance/tags", s.financeCreateTag)
 	m.HandleFunc("PATCH /api/finance/tags/{id}", s.financeUpdateTag)
 	m.HandleFunc("DELETE /api/finance/tags/{id}", s.financeDeleteTag)
 	m.HandleFunc("PUT /api/finance/tag-links", s.financeSetTags)
+	m.HandleFunc("PUT /api/finance/tx-tags", s.financeSetTxTags)
+	m.HandleFunc("GET /api/finance/untagged", s.financeUntagged)
 	m.HandleFunc("PUT /api/finance/labels", s.financeSetLabel)
+	m.HandleFunc("PUT /api/finance/wallets", s.financeSetWallet)
+	m.HandleFunc("DELETE /api/finance/wallets/{id}", s.financeDeleteWallet)
+	m.HandleFunc("POST /api/finance/wallets/{id}/spends", s.financeAddWalletSpend)
+	m.HandleFunc("PATCH /api/finance/wallet-spends/{id}", s.financeUpdateWalletSpend)
+	m.HandleFunc("DELETE /api/finance/wallet-spends/{id}", s.financeDeleteWalletSpend)
 	m.HandleFunc("GET /api/finance/detail", s.financeDetail)
 	m.HandleFunc("POST /api/finance/goals", s.financeSaveGoal)
 	m.HandleFunc("DELETE /api/finance/goals/{id}", s.financeDeleteGoal)
@@ -244,6 +252,7 @@ type finLabelReq struct {
 	Keys  []string `json:"keys"`
 	Label string   `json:"label"`
 	Cat1  string   `json:"cat1"`
+	Memo  string   `json:"memo"`
 }
 
 // PUT /api/finance/labels {keys, label, cat1} — 둘 다 비우면 원래대로.
@@ -252,7 +261,7 @@ func (s *Server) financeSetLabel(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &req) {
 		return
 	}
-	if s.storeErr(w, s.st.FinanceSetLabel(r.Context(), req.Keys, req.Label, req.Cat1), "finance label") {
+	if s.storeErr(w, s.st.FinanceSetLabel(r.Context(), req.Keys, req.Label, req.Cat1, req.Memo), "finance label") {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -288,4 +297,128 @@ func (s *Server) financeSpend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+type finWalletReq struct {
+	OwnerID   int64 `json:"owner_id"`
+	Cash      int64 `json:"cash"`      // 충전 잔액
+	Incentive int64 `json:"incentive"` // 인센티브 잔액
+}
+
+// PUT /api/finance/wallets {owner_id, cash, incentive} — 그 사람의 지역화폐 잔액을 지금 기준으로 맞춘다. 없으면 만든다.
+func (s *Server) financeSetWallet(w http.ResponseWriter, r *http.Request) {
+	var req finWalletReq
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	if !s.isUser(r, req.OwnerID) {
+		writeErr(w, http.StatusBadRequest, "누구의 지역화폐인지 골라주세요")
+		return
+	}
+	id, err := s.st.FinanceSetWalletBalance(r.Context(), req.OwnerID, req.Cash, req.Incentive, time.Now())
+	if s.storeErr(w, err, "finance wallet balance") {
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]int64{"id": id})
+}
+
+func (s *Server) financeDeleteWallet(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	if s.storeErr(w, s.st.FinanceDeleteWallet(r.Context(), id), "finance wallet delete") {
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+type finWalletSpendReq struct {
+	At     string `json:"at"`
+	Title  string `json:"title"`
+	Amount int64  `json:"amount"`
+}
+
+func (s *Server) financeAddWalletSpend(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	var req finWalletSpendReq
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	u, _ := auth.UserFrom(r.Context())
+	sid, err := s.st.FinanceAddWalletSpend(r.Context(), id, req.At, req.Title, req.Amount, u.ID, time.Now())
+	if s.storeErr(w, err, "finance wallet spend") {
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]int64{"id": sid})
+}
+
+func (s *Server) financeDeleteWalletSpend(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	if s.storeErr(w, s.st.FinanceDeleteWalletSpend(r.Context(), id), "finance wallet spend delete") {
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) financeUpdateWalletSpend(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	var req finWalletSpendReq
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	if s.storeErr(w, s.st.FinanceUpdateWalletSpend(r.Context(), id, req.At, req.Title, req.Amount, time.Now()), "finance wallet spend update") {
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// POST /api/finance/regular {key} — 평소 지출로 둔다(고정도 예상 외도 아님).
+func (s *Server) financeRegular(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Key string `json:"key"`
+	}
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	if s.storeErr(w, s.st.FinanceSetRegular(r.Context(), req.Key), "finance regular") {
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// PUT /api/finance/tx-tags {refs, tag_ids} — 거래 한 건 한 건에 태그를 통째로 바꿔 단다.
+func (s *Server) financeSetTxTags(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Refs   []string `json:"refs"`
+		TagIDs []int64  `json:"tag_ids"`
+	}
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	if s.storeErr(w, s.st.FinanceSetTxTags(r.Context(), req.Refs, req.TagIDs), "finance tx tags") {
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// GET /api/finance/untagged?owner=&kind=regular|unexpected|income&offset= — 미분류 거래를 100개씩.
+func (s *Server) financeUntagged(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	owner, _ := strconv.ParseInt(q.Get("owner"), 10, 64)
+	offset := atoiDefault(q.Get("offset"), 0)
+	ov, total, err := s.st.FinanceUntagged(r.Context(), owner, q.Get("kind"), max(offset, 0), 100, time.Now())
+	if s.storeErr(w, err, "finance untagged") {
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"page": ov, "total": total, "offset": offset})
 }

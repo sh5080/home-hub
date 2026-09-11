@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"math"
 	"regexp"
 	"slices"
@@ -37,6 +38,7 @@ type FinMonth struct {
 	FixedIn    int64  `json:"fixed_in"`   // 수입 중 고정수입
 	FixedSave  int64  `json:"fixed_save"` // 저축 중 고정(적금 자동이체 등)
 	Unexpected int64  `json:"unexpected"` // 쓴 돈 중 예상 외 지출
+	Wallet     int64  `json:"wallet"`     // 쓴 돈 중 지역화폐로 쓴 것
 	Partial    bool   `json:"partial"`    // 이번 달(아직 안 끝남)
 }
 
@@ -78,6 +80,18 @@ type FinIncome struct {
 	FixedOverride *bool `json:"fixed_override"`
 }
 
+// FinRegular 는 평소 지출 한 건.
+type FinRegular struct {
+	Key     string `json:"key"`
+	Ref     string `json:"ref"`
+	Edited  bool   `json:"edited"`
+	At      string `json:"at"`
+	Content string `json:"content"`
+	Cat1    string `json:"cat1"`
+	Amount  int64  `json:"amount"`
+	Wallet  bool   `json:"wallet"` // 지역화폐로 쓴 것
+}
+
 // FinNotSpend 는 '지출 아님'으로 뺀 항목(최근 13개월 합).
 type FinNotSpend struct {
 	Key    string `json:"key"`
@@ -91,6 +105,8 @@ type FinNotSpend struct {
 // FinIncomeTx 는 그 달의 예상 외 수입(고정수입이 아닌 수입) 한 건.
 type FinIncomeTx struct {
 	Group   string   `json:"group"` // FinIncome.Key
+	Ref     string   `json:"ref"`
+	Key     string   `json:"key"` // 이 거래의 항목 key
 	Keys    []string `json:"keys"`
 	At      string   `json:"at"`
 	Content string   `json:"content"`
@@ -101,6 +117,7 @@ type FinIncomeTx struct {
 
 type FinUnexpected struct {
 	Key     string `json:"key"`
+	Ref     string `json:"ref"`
 	At      string `json:"at"`
 	Content string `json:"content"`
 	Cat1    string `json:"cat1"`
@@ -123,6 +140,13 @@ type FinPlan struct {
 	SpendAvg     int64 `json:"spend_avg"` // 최근 6개월 평소 생활비 평균(쓴 돈 - 예상 외 지출)
 	Emergency    int64 `json:"emergency"` // 비상금: MMF·파킹 자산(투자·저축 묶음에 있어도)
 	Free         int64 `json:"free"`      // 여유자금 = Liquid + Emergency - SpendAvg × BufferMonths
+	// 이번 달 진행: 쓸 수 있는 돈에서 이번 달 변동지출(지역화폐 포함)을 뺀 것.
+	MonthSpent      int64 `json:"month_spent"`
+	MonthWallet     int64 `json:"month_wallet"`
+	MonthUnexpected int64 `json:"month_unexpected"` // 이번 달 예상 외(남은 돈 계산에선 뺀다)
+	MonthLeft       int64 `json:"month_left"`
+	DaysPassed      int   `json:"days_passed"`
+	DaysInMonth     int   `json:"days_in_month"`
 }
 
 type FinGoal struct {
@@ -152,13 +176,17 @@ type FinOverview struct {
 	Income     []FinIncome         `json:"income"`
 	IncomeTx   []FinIncomeTx       `json:"income_tx"` // month 의 예상 외 수입
 	NotSpend   []FinNotSpend       `json:"not_spend"`
+	Wallets    []FinWallet         `json:"wallets"` // 충전식 지갑(지역화폐 등). 잔액은 자산(바로 쓸 수 있는 돈)에 더한다
 	Tags       []FinTag            `json:"tags"`
-	Labels     map[string]FinLabel `json:"labels"`    // 사람이 고친 이름·분류
-	TagLinks   map[string][]int64  `json:"tag_links"` // 항목 key → 태그 id
-	TagSpend   []FinTagSpend       `json:"tag_spend"` // month 의 태그별 쓴 돈. 한 거래가 태그 여러 개면 각각에 센다
-	Untagged   int64               `json:"untagged"`  // month 에 쓴 돈 중 태그 없는 것
-	Month      string              `json:"month"`     // 예상 외 지출을 본 달
+	Labels     map[string]FinLabel `json:"labels"`      // 사람이 고친 이름·분류
+	TagLinks   map[string][]int64  `json:"tag_links"`   // 항목 key → 태그 id
+	TxTags     map[string][]int64  `json:"tx_tags"`     // 거래(ref) → 태그 id. 목록에 나온 거래만
+	KeyTxTags  map[string][]int64  `json:"key_tx_tags"` // 항목 key → 그 이름의 다른 거래에 썼던 태그(불러오기 제안용)
+	TagSpend   []FinTagSpend       `json:"tag_spend"`   // month 의 태그별 쓴 돈. 한 거래가 태그 여러 개면 각각에 센다
+	Untagged   int64               `json:"untagged"`    // month 에 쓴 돈 중 태그 없는 것
+	Month      string              `json:"month"`       // 예상 외 지출을 본 달
 	Unexpected []FinUnexpected     `json:"unexpected"`
+	Regular    []FinRegular        `json:"regular"` // month 의 평소 지출
 	Plan       FinPlan             `json:"plan"`
 	Goals      []FinGoal           `json:"goals"`
 	TxCount    int                 `json:"tx_count"`
@@ -169,11 +197,13 @@ type FinOverview struct {
 
 type finRow struct {
 	FinTx
-	owner int64
-	kind  string // in | spend | save | skip
-	key   string // finKey(Content)
-	label string // 사람이 고친 이름(없으면 Content)
-	orig  string // 파일의 분류(Cat1 은 고친 값으로 바뀐다)
+	owner  int64
+	kind   string // in | spend | save | skip
+	key    string // finKey(Content)
+	label  string // 사람이 고친 이름(없으면 Content)
+	orig   string // 파일의 분류(Cat1 은 고친 값으로 바뀐다)
+	wallet bool   // 지역화폐로 쓴 것(직접 적은 기록)
+	ref    string // 태그가 붙는 거래: 't<fin_tx.id>' | 'w<지갑 사용 id>'
 }
 
 var finKeyStrip = regexp.MustCompile(`[0-9\s()\[\]_\-.,*/]+|청구$`)
@@ -255,6 +285,8 @@ var (
 	finSaveRe = regexp.MustCompile(`(?i)적금|예금|청약|펀드|연금|ISA|IRP|저금통|납입|저축|보험|해상|화재|생명|손보|라이프`)
 	// '롯데카드', '신한카드', '스마일카드 대금' 같은 카드값 이체.
 	finCardBill = regexp.MustCompile(`^\s*(\S{1,8})카드\s*(대금)?\s*$`)
+	// '네이버페이충전', '카카오페이 충전' 같은 간편결제 충전.
+	finPayCharge = regexp.MustCompile(`^\s*(\S+페이)\s*충전\s*$`)
 	// 결제수단이 영어로 오는 카드.
 	finCardEn = map[string]string{"스마일": "smile", "삼성": "samsung", "현대": "hyundai", "국민": "kb", "하나": "hana", "우리": "woori", "농협": "nh"}
 	// 계좌(결제수단) 이름으로 보는 저축 상품. '저축예금'은 보통 입출금 통장이라 넣지 않는다.
@@ -294,6 +326,16 @@ func (s *Store) FinanceSetIncome(ctx context.Context, key string, income *bool) 
 	return err
 }
 
+// FinanceSetRegular 는 항목을 평소 지출로 둔다 — 고정도 아니고, 금액이 커도 예상 외로 보지 않는다.
+func (s *Store) FinanceSetRegular(ctx context.Context, key string) error {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return invalid("항목이 비었어요")
+	}
+	_, err := s.db.ExecContext(ctx, `INSERT INTO fin_fixed (key, fixed) VALUES (?, -1) ON CONFLICT(key) DO UPDATE SET fixed=-1`, key)
+	return err
+}
+
 // FinanceSetFixed 는 고정지출 판정을 뒤집는다. fixed 가 nil 이면 자동으로 되돌린다.
 func (s *Store) FinanceSetFixed(ctx context.Context, key string, fixed *bool) error {
 	key = strings.TrimSpace(key)
@@ -310,7 +352,12 @@ func (s *Store) FinanceSetFixed(ctx context.Context, key string, fixed *bool) er
 
 // FinanceOverview 는 owner(0 이면 가족 전체)의 재정 요약이다. month 는 예상 외 지출을 볼 달('YYYY-MM', 비면 지난달).
 func (s *Store) FinanceOverview(ctx context.Context, owner int64, month string, now time.Time) (FinOverview, error) {
-	out := FinOverview{AsOf: map[int64]string{}, Groups: map[string]int64{}, Items: []FinItemView{}, Fixed: []FinFixed{}, Unexpected: []FinUnexpected{}, Income: []FinIncome{}, IncomeTx: []FinIncomeTx{}, NotSpend: []FinNotSpend{}, Goals: []FinGoal{}, Uploaded: map[int64]int64{}}
+	return s.financeOverview(ctx, owner, month, now, false)
+}
+
+// financeOverview: allMonths 면 평소·예상 외 지출과 예상 외 수입 목록을 한 달이 아니라 모든 달로 채운다(미분류 보기).
+func (s *Store) financeOverview(ctx context.Context, owner int64, month string, now time.Time, allMonths bool) (FinOverview, error) {
+	out := FinOverview{AsOf: map[int64]string{}, Groups: map[string]int64{}, Items: []FinItemView{}, Fixed: []FinFixed{}, Unexpected: []FinUnexpected{}, Regular: []FinRegular{}, Income: []FinIncome{}, IncomeTx: []FinIncomeTx{}, NotSpend: []FinNotSpend{}, Goals: []FinGoal{}, Uploaded: map[int64]int64{}, Wallets: []FinWallet{}}
 	out.UploadDays = s.finUploadDays(ctx)
 	tags, err := s.FinanceTags(ctx)
 	if err != nil {
@@ -321,6 +368,14 @@ func (s *Store) FinanceOverview(ctx context.Context, owner int64, month string, 
 		return out, err
 	}
 	out.Tags, out.TagLinks, out.TagSpend = tags, links, []FinTagSpend{}
+	if err := s.finMigrateTxTags(ctx, links); err != nil {
+		return out, err
+	}
+	txTags, err := s.finTxTags(ctx)
+	if err != nil {
+		return out, err
+	}
+	out.TxTags, out.KeyTxTags = map[string][]int64{}, map[string][]int64{}
 	labels, err := s.finLabels(ctx)
 	if err != nil {
 		return out, err
@@ -394,6 +449,17 @@ func (s *Store) FinanceOverview(ctx context.Context, owner int64, month string, 
 		}
 		irows.Close()
 	}
+	// 지갑 잔액은 파일에 없다 — 바로 쓸 수 있는 돈으로 더한다.
+	wallets, err := s.FinanceWallets(ctx, owner, now)
+	if err != nil {
+		return out, err
+	}
+	out.Wallets = wallets
+	for _, w := range wallets {
+		out.Items = append(out.Items, FinItemView{OwnerID: w.OwnerID, FinItem: FinItem{Group: "liquid", Category: "지역화폐", Name: w.Name + " (직접 관리)", Amount: w.Balance}})
+		out.Groups["liquid"] += w.Balance
+		out.TotalAsset += w.Balance
+	}
 	out.NetWorth = out.TotalAsset - out.TotalDebt
 
 	// 순자산 추이: 달마다 그 달 말까지의 사람별 최신 스냅샷을 더한다.
@@ -439,7 +505,7 @@ func (s *Store) FinanceOverview(ctx context.Context, owner int64, month string, 
 
 	// 2) 거래: 최근 13개월.
 	from := now.AddDate(0, -13, 0).Format("2006-01") + "-01T00:00"
-	q := `SELECT owner_id, at, type, cat1, cat2, content, amount, method, memo FROM fin_tx WHERE at >= ?`
+	q := `SELECT id, owner_id, at, type, cat1, cat2, content, amount, method, memo FROM fin_tx WHERE at >= ?`
 	args := []any{from}
 	if owner != 0 {
 		q += ` AND owner_id = ?`
@@ -452,13 +518,22 @@ func (s *Store) FinanceOverview(ctx context.Context, owner int64, month string, 
 	var all []finRow
 	for xrows.Next() {
 		var r finRow
-		if err := xrows.Scan(&r.owner, &r.At, &r.Type, &r.Cat1, &r.Cat2, &r.Content, &r.Amount, &r.Method, &r.Memo); err != nil {
+		var id int64
+		if err := xrows.Scan(&id, &r.owner, &r.At, &r.Type, &r.Cat1, &r.Cat2, &r.Content, &r.Amount, &r.Method, &r.Memo); err != nil {
 			xrows.Close()
 			return out, err
 		}
+		r.ref = "t" + strconv.FormatInt(id, 10)
 		all = append(all, r)
 	}
 	xrows.Close()
+	// 지갑에서 쓴 건 직접 적은 기록이 실제 지출이다(충전 이체는 아래에서 지갑으로 옮긴 돈으로 뺀다).
+	wspends, err := s.finWalletSpendRows(ctx, owner, from)
+	if err != nil {
+		return out, err
+	}
+	all = append(all, wspends...)
+	sort.SliceStable(all, func(i, j int) bool { return all[i].At < all[j].At })
 	out.TxCount = len(all)
 	for i := range all {
 		r := &all[i]
@@ -472,7 +547,8 @@ func (s *Store) FinanceOverview(ctx context.Context, owner int64, month string, 
 			}
 		}
 	}
-	edited := func(k string) bool { _, ok := labels[k]; return ok }
+	// '수정됨'은 이름·분류를 고친 것만. 메모는 설명이라 표시하지 않는다.
+	edited := func(k string) bool { l := labels[k]; return l.Label != "" || l.Cat1 != "" }
 	plain := make([]FinTx, len(all))
 	for i := range all {
 		plain[i] = all[i].FinTx
@@ -520,6 +596,35 @@ func (s *Store) FinanceOverview(ctx context.Context, owner int64, month string, 
 			methods = append(methods, strings.ToLower(r.Method))
 		}
 	}
+	// 잔액을 맞춘 뒤의 충전만 지갑으로 옮긴 돈이다. 그 전엔 사용 기록이 없으니 충전을 쓴 돈으로 둔다
+	// (안 그러면 지난 달들의 지역화폐 지출이 통째로 사라져 평소 생활비가 줄어든다).
+	// 사용을 적어둔 달도 마찬가지다 — 그 달은 적은 사용이 쓴 돈이다(충전까지 세면 두 번이다).
+	recorded := map[string]bool{}
+	for _, r := range wspends {
+		recorded[fmt.Sprintf("%d:%s", r.owner, r.At[:7])] = true
+	}
+	walletCharge := func(r *finRow) bool {
+		for _, w := range wallets {
+			if w.OwnerID == r.owner && strings.Contains(r.Content, w.Match) &&
+				(r.At > w.BaseAt || recorded[fmt.Sprintf("%d:%s", r.owner, r.At[:7])]) {
+				return true
+			}
+		}
+		return false
+	}
+	payCharge := func(r *finRow) bool {
+		m := finPayCharge.FindStringSubmatch(r.Content)
+		if m == nil {
+			return false
+		}
+		brand := strings.ToLower(m[1])
+		for _, meth := range methods {
+			if strings.Contains(meth, brand) {
+				return true
+			}
+		}
+		return false
+	}
 	cardBill := func(r *finRow) bool {
 		m := finCardBill.FindStringSubmatch(r.Content)
 		if m == nil {
@@ -556,7 +661,9 @@ func (s *Store) FinanceOverview(ctx context.Context, owner int64, month string, 
 			// 내 저축·투자 계좌로 옮긴 것도 '떼어둔 돈'이다. 매달 자동이체되는 적금을
 			// 월 가용에서 빼려면 세야 한다(들어온 쪽 줄은 건너뛴다).
 			r.kind = "save"
-		case r.Type == "이체" && r.Amount < 0 && cardBill(r):
+		case r.Type == "이체" && r.Amount < 0 && walletCharge(r):
+			r.kind = "skip"
+		case r.Type == "이체" && r.Amount < 0 && (cardBill(r) || payCharge(r)):
 			r.kind = "skip"
 		case r.Type == "이체" && (paired[i] || toFamily(r.Content) || parking(r)):
 			r.kind = "skip"
@@ -623,6 +730,7 @@ func (s *Store) FinanceOverview(ctx context.Context, owner int64, month string, 
 
 	// 고정 판정을 사람이 뒤집은 것(지출·수입 공통, key 는 finKey).
 	overrides := map[string]bool{}
+	regular := map[string]bool{}
 	orows, err := s.db.QueryContext(ctx, `SELECT key, fixed FROM fin_fixed`)
 	if err != nil {
 		return out, err
@@ -634,7 +742,11 @@ func (s *Store) FinanceOverview(ctx context.Context, owner int64, month string, 
 			orows.Close()
 			return out, err
 		}
-		overrides[k] = f != 0
+		// fixed: 1 고정 / 0 예상 외로 옮김 / -1 평소(예상 외로 판정하지 않음)
+		overrides[k] = f == 1
+		if f < 0 {
+			regular[k] = true
+		}
 	}
 	orows.Close()
 
@@ -838,6 +950,9 @@ func (s *Store) FinanceOverview(ctx context.Context, owner int64, month string, 
 			m.OtherIn += r.Amount
 		case "spend":
 			m.Spend += -r.Amount
+			if r.wallet {
+				m.Wallet += -r.Amount
+			}
 			if fixedKeys[finKey(r.Content)] {
 				m.Fixed += -r.Amount
 			}
@@ -892,12 +1007,16 @@ func (s *Store) FinanceOverview(ctx context.Context, owner int64, month string, 
 			}
 		}
 		for _, r := range all {
-			// 카드대금은 한 달치를 모은 금액이라 한 건으로 튀어 보여도 '예상 외'가 아니다.
-			if r.kind != "spend" || r.Amount >= 0 || r.At[:7] != month || fixedKeys[finKey(r.Content)] || r.Cat1 == "카드대금" {
+			// 카드값은 한 달치를 모은 금액이라 한 건으로 튀어 보여도 '예상 외'가 아니다. 분류가 아니라 이름으로
+			// 가린다 — 파일은 사람에게 보낸 이체도 '카드대금'으로 분류하곤 한다.
+			if r.kind != "spend" || r.Amount >= 0 || r.At[:7] != month || fixedKeys[finKey(r.Content)] || finCardBill.MatchString(r.Content) {
 				continue
 			}
 			amt := -r.Amount
 			// 사람이 '예상 외'로 옮긴 건 기준과 상관없이 넣는다.
+			if regular[r.key] {
+				continue
+			}
 			moved := false
 			if v, ok := overrides[r.key]; ok && !v {
 				moved = true
@@ -917,12 +1036,22 @@ func (s *Store) FinanceOverview(ctx context.Context, owner int64, month string, 
 				reason = "예상 외로 옮김"
 			}
 			if reason != "" {
-				found = append(found, FinUnexpected{Key: r.key, Edited: edited(r.key), At: r.At, Content: r.label, Cat1: r.Cat1, Amount: amt, Reason: reason})
+				found = append(found, FinUnexpected{Key: r.key, Ref: r.ref, Edited: edited(r.key), At: r.At, Content: r.label, Cat1: r.Cat1, Amount: amt, Reason: reason})
 			}
 		}
 		return found
 	}
-	out.Unexpected = detect(month)
+	scope := map[string]bool{month: true}
+	if allMonths {
+		for _, m := range out.Months {
+			scope[m.Month] = true
+		}
+		for _, m := range out.Months {
+			out.Unexpected = append(out.Unexpected, detect(m.Month)...)
+		}
+	} else {
+		out.Unexpected = detect(month)
+	}
 	if out.Unexpected == nil {
 		out.Unexpected = []FinUnexpected{}
 	}
@@ -934,18 +1063,57 @@ func (s *Store) FinanceOverview(ctx context.Context, owner int64, month string, 
 	}
 	sort.Slice(out.Unexpected, func(i, j int) bool { return out.Unexpected[i].Amount > out.Unexpected[j].Amount })
 
+	// 평소 지출: 그 달에 쓴 돈 중 고정도 예상 외도 아닌 것(한 달에 쓸 수 있는 돈 안에서 쓰는 돈).
+	unexp := map[string]bool{}
+	for _, u := range out.Unexpected {
+		unexp[fmt.Sprintf("%s|%s|%d", u.Key, u.At, u.Amount)] = true
+	}
+	for _, r := range all {
+		if r.kind != "spend" || r.Amount >= 0 || !scope[r.At[:7]] || fixedKeys[r.key] {
+			continue
+		}
+		if unexp[fmt.Sprintf("%s|%s|%d", r.key, r.At, -r.Amount)] {
+			continue
+		}
+		out.Regular = append(out.Regular, FinRegular{Key: r.key, Ref: r.ref, Edited: edited(r.key), At: r.At, Content: r.label, Cat1: r.Cat1, Amount: -r.Amount, Wallet: r.wallet})
+	}
+	sort.Slice(out.Regular, func(i, j int) bool { return out.Regular[i].Amount > out.Regular[j].Amount })
+
 	// 예상 외 수입: 그 달의 수입 중 고정수입이 아닌 것.
 	for _, r := range all {
-		if r.kind != "in" || r.At[:7] != month {
+		if r.kind != "in" || !scope[r.At[:7]] {
 			continue
 		}
 		g := incByGroup[keyGroup[r.key]]
 		if g == nil || g.Fixed {
 			continue
 		}
-		out.IncomeTx = append(out.IncomeTx, FinIncomeTx{Group: g.Key, Keys: g.Keys, At: r.At, Content: r.label, Cat1: r.Cat1, Amount: r.Amount, Edited: edited(r.key)})
+		out.IncomeTx = append(out.IncomeTx, FinIncomeTx{Group: g.Key, Ref: r.ref, Key: r.key, Keys: g.Keys, At: r.At, Content: r.label, Cat1: r.Cat1, Amount: r.Amount, Edited: edited(r.key)})
 	}
 	sort.Slice(out.IncomeTx, func(i, j int) bool { return out.IncomeTx[i].Amount > out.IncomeTx[j].Amount })
+
+	// 목록에 나온 거래의 태그, 그리고 같은 이름의 다른 거래에 썼던 태그(제안만 — 저절로 붙이지 않는다).
+	shownKeys := map[string]bool{}
+	addRef := func(ref, key string) {
+		if ids := txTags[ref]; len(ids) > 0 {
+			out.TxTags[ref] = ids
+		}
+		shownKeys[key] = true
+	}
+	for _, u := range out.Unexpected {
+		addRef(u.Ref, u.Key)
+	}
+	for _, u := range out.Regular {
+		addRef(u.Ref, u.Key)
+	}
+	for _, u := range out.IncomeTx {
+		addRef(u.Ref, u.Key)
+	}
+	for _, r := range all {
+		if shownKeys[r.key] && len(txTags[r.ref]) > 0 {
+			out.KeyTxTags[r.key] = uniqIDs(append(out.KeyTxTags[r.key], txTags[r.ref]...))
+		}
+	}
 
 	// 태그별: 그 달에 쓴 돈(고정 포함)과 저축.
 	byTag := map[int64]*FinTagSpend{}
@@ -953,7 +1121,10 @@ func (s *Store) FinanceOverview(ctx context.Context, owner int64, month string, 
 		if (r.kind != "spend" && r.kind != "save") || r.Amount >= 0 || r.At[:7] != month {
 			continue
 		}
-		ids := links[finKey(r.Content)]
+		ids := txTags[r.ref]
+		if fixedKeys[r.key] {
+			ids = uniqIDs(append(append([]int64{}, ids...), links[r.key]...))
+		}
 		if len(ids) == 0 {
 			if r.kind == "spend" {
 				out.Untagged += -r.Amount
@@ -1049,6 +1220,13 @@ func (s *Store) FinanceOverview(ctx context.Context, owner int64, month string, 
 	if cnt > 0 {
 		out.Plan.VariableAvg = v3 / int64(cnt)
 	}
+	if n := len(out.Months); n > 0 {
+		cur := out.Months[n-1] // 이번 달(아직 안 끝남)
+		// 예상 외(가전 등)는 뺀다 — 평소 생활비와 같은 기준이어야 한도와 비교할 수 있다.
+		out.Plan.MonthSpent, out.Plan.MonthWallet, out.Plan.MonthUnexpected = cur.Variable-cur.Unexpected, cur.Wallet, cur.Unexpected
+	}
+	out.Plan.DaysPassed = now.Day()
+	out.Plan.DaysInMonth = time.Date(now.Year(), now.Month()+1, 0, 0, 0, 0, 0, now.Location()).Day()
 	out.Plan.IncomeBase = income
 	base := income
 	if base == 0 {
@@ -1056,7 +1234,11 @@ func (s *Store) FinanceOverview(ctx context.Context, owner int64, month string, 
 	}
 	out.Plan.Spendable = base - out.Plan.FixedSpend - out.Plan.FixedSave - out.Plan.GoalsMonthly
 	out.Plan.BufferMonths = buffer
+	// 지역화폐는 쓸 곳이 정해진 돈이라 여유자금엔 넣지 않는다(자산·순자산엔 들어간다).
 	out.Plan.Liquid = out.Groups["liquid"]
+	for _, w := range out.Wallets {
+		out.Plan.Liquid -= w.Balance
+	}
 	for _, it := range out.Items {
 		if it.Group != "liquid" && it.Group != "debt" && finParkRe.MatchString(it.Name+" "+it.Category) {
 			out.Plan.Emergency += it.Amount
