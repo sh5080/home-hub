@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { api, type FinTag } from '../api'
 import { useInvalidating } from '../lib/hooks'
 import { useConfirm } from './Confirm'
@@ -40,10 +40,15 @@ export function TagChips({ ids, tags, onEdit }: { ids: number[] | undefined; tag
 }
 
 /** 항목(key) 하나의 태그를 고르고, 태그를 만들거나 지운다. */
-export function TagPicker({ target, tags, links, onClose }: {
-  target: { keys: string[]; label: string } | null
+/**
+ * 태그를 붙일 대상. refs 면 거래 한 건 한 건(평소·예상 외), keys 면 항목(고정 — 매달 같은 것).
+ * cur 는 지금 붙은 태그, suggest 는 같은 이름의 다른 거래에 썼던 태그(누를 때만 붙는다).
+ */
+export type TagTarget = { label: string; keys?: string[]; refs?: string[]; cur: number[]; suggest?: number[] }
+
+export function TagPicker({ target, tags, onClose }: {
+  target: TagTarget | null
   tags: FinTag[]
-  links: Record<string, number[]>
   onClose: () => void
 }) {
   const confirm = useConfirm()
@@ -51,6 +56,7 @@ export function TagPicker({ target, tags, links, onClose }: {
   // 묶인 항목(같은 이름으로 고친 것)은 key 마다 같은 태그를 단다.
   const setLinks = useInvalidating((b: { keys: string[]; tag_ids: number[] }) =>
     Promise.all(b.keys.map((key) => api.put('/api/finance/tag-links', { key, tag_ids: b.tag_ids }))), keys)
+  const setTx = useInvalidating((b: { refs: string[]; tag_ids: number[] }) => api.put('/api/finance/tx-tags', b), keys)
   const create = useInvalidating((b: { name: string; color: string }) => api.post<FinTag>('/api/finance/tags', b), keys)
   const del = useInvalidating((id: number) => api.del(`/api/finance/tags/${id}`), keys)
   const update = useInvalidating(({ id, ...b }: { id: number; name: string; color: string }) => api.patch(`/api/finance/tags/${id}`, b), keys)
@@ -59,18 +65,23 @@ export function TagPicker({ target, tags, links, onClose }: {
   const [color, setColor] = useState('emerald')
   const [editing, setEditing] = useState(false)
   const [err, setErr] = useState<string | null>(null)
-  const cur = target ? links[target.keys[0]] ?? [] : []
-
-  const toggle = (id: number) => {
+  // 누르면 바로 저장하고, 화면은 서버 응답을 기다리지 않고 따라간다(미분류 보기의 다른 달 데이터일 수도 있다).
+  const [cur, setCur] = useState<number[]>([])
+  useEffect(() => { setCur(target?.cur ?? []) }, [target])
+  const apply = (ids: number[]) => {
     if (!target) return
-    setLinks.mutate({ keys: target.keys, tag_ids: cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id] })
+    setCur(ids)
+    if (target.refs) setTx.mutate({ refs: target.refs, tag_ids: ids })
+    else if (target.keys) setLinks.mutate({ keys: target.keys, tag_ids: ids })
   }
+  const toggle = (id: number) => apply(cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id])
+  const suggest = (target?.suggest ?? []).filter((id) => !cur.includes(id)).map((id) => tags.find((t) => t.id === id)).filter((t): t is FinTag => !!t)
   const add = async () => {
     if (!target || !name.trim()) return
     setErr(null)
     try {
       const t = await create.mutateAsync({ name: name.trim(), color })
-      setLinks.mutate({ keys: target.keys, tag_ids: [...cur, t.id] })
+      apply([...cur, t.id])
       setName('')
     } catch (e) { setErr(e instanceof Error ? e.message : '만들지 못했어요') }
   }
@@ -91,9 +102,17 @@ export function TagPicker({ target, tags, links, onClose }: {
       <div className="space-y-4">
         <div>
           <div className="mb-1.5 flex items-center justify-between">
-            <p className="text-xs text-muted">{editing ? '고칠 태그를 누르세요' : '같은 내용의 거래에 모두 붙어요'}</p>
+            <p className="text-xs text-muted">{editing ? '고칠 태그를 누르세요' : target?.refs ? `이 거래${target.refs.length > 1 ? ` ${target.refs.length}건` : ''}에만 붙어요` : '이 항목(매달 같은 것)에 붙어요'}</p>
             <button onClick={() => { setEditing(!editing); setEdit(null); setErr(null) }} className="text-xs text-muted underline">{editing ? '완료' : '태그 관리'}</button>
           </div>
+          {!editing && suggest.length > 0 && (
+            <div className="mb-2 flex flex-wrap items-center gap-1.5">
+              <span className="text-[11px] text-faint">이전에 쓴 태그</span>
+              {suggest.map((t) => (
+                <button key={t.id} type="button" onClick={() => toggle(t.id)} className="rounded-lg border border-dashed border-line px-2 py-1 text-xs text-muted hover:bg-surface-2">+ {t.name}</button>
+              ))}
+            </div>
+          )}
           <div className="flex flex-wrap gap-1.5">
             {tags.map((t) => {
               const on = cur.includes(t.id)
