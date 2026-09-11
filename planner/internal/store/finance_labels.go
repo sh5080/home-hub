@@ -10,10 +10,11 @@ import (
 type FinLabel struct {
 	Label string `json:"label"`
 	Cat1  string `json:"cat1"`
+	Memo  string `json:"memo"`
 }
 
 func (s *Store) finLabels(ctx context.Context) (map[string]FinLabel, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT key, label, cat1 FROM fin_labels`)
+	rows, err := s.db.QueryContext(ctx, `SELECT key, label, cat1, memo FROM fin_labels`)
 	if err != nil {
 		return nil, err
 	}
@@ -22,7 +23,7 @@ func (s *Store) finLabels(ctx context.Context) (map[string]FinLabel, error) {
 	for rows.Next() {
 		var k string
 		var l FinLabel
-		if err := rows.Scan(&k, &l.Label, &l.Cat1); err != nil {
+		if err := rows.Scan(&k, &l.Label, &l.Cat1, &l.Memo); err != nil {
 			return nil, err
 		}
 		out[k] = l
@@ -30,9 +31,12 @@ func (s *Store) finLabels(ctx context.Context) (map[string]FinLabel, error) {
 	return out, rows.Err()
 }
 
-// FinanceSetLabel 은 항목들(keys)의 이름·분류를 고친다. 둘 다 비우면 원래대로.
-func (s *Store) FinanceSetLabel(ctx context.Context, keys []string, label, cat1 string) error {
-	label, cat1 = strings.TrimSpace(label), strings.TrimSpace(cat1)
+// FinanceSetLabel 은 항목들(keys)의 이름·분류·메모를 고친다. 셋 다 비우면 원래대로.
+func (s *Store) FinanceSetLabel(ctx context.Context, keys []string, label, cat1, memo string) error {
+	label, cat1, memo = strings.TrimSpace(label), strings.TrimSpace(cat1), strings.TrimSpace(memo)
+	if len([]rune(memo)) > 200 {
+		return invalid("메모는 200자까지예요")
+	}
 	if len(keys) == 0 || len(keys) > 50 {
 		return invalid("항목이 비었어요")
 	}
@@ -49,11 +53,11 @@ func (s *Store) FinanceSetLabel(ctx context.Context, keys []string, label, cat1 
 		if k == "" {
 			return invalid("항목이 비었어요")
 		}
-		if label == "" && cat1 == "" {
+		if label == "" && cat1 == "" && memo == "" {
 			_, err = tx.ExecContext(ctx, `DELETE FROM fin_labels WHERE key=?`, k)
 		} else {
-			_, err = tx.ExecContext(ctx, `INSERT INTO fin_labels (key, label, cat1) VALUES (?, ?, ?)
-				ON CONFLICT(key) DO UPDATE SET label=excluded.label, cat1=excluded.cat1`, k, label, cat1)
+			_, err = tx.ExecContext(ctx, `INSERT INTO fin_labels (key, label, cat1, memo) VALUES (?, ?, ?, ?)
+				ON CONFLICT(key) DO UPDATE SET label=excluded.label, cat1=excluded.cat1, memo=excluded.memo`, k, label, cat1, memo)
 		}
 		if err != nil {
 			return err
