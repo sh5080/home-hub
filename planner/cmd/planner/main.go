@@ -46,6 +46,8 @@ func main() {
 		err = cmdCare(os.Args[2:])
 	case "babyfood":
 		err = cmdBabyfood(os.Args[2:])
+	case "finance":
+		err = cmdFinance(os.Args[2:])
 	case "-h", "--help", "help":
 		usage()
 		return
