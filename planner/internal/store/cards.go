@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 )
@@ -105,9 +106,9 @@ func (s *Store) CreateCard(ctx context.Context, columnID int64, in CardInput, by
 	}
 	now := time.Now().Unix()
 	res, err := tx.ExecContext(ctx, `
-		INSERT INTO cards (column_id, title, description, content, position, due_at, end_at, priority, assignee_id, created_by, created_at, updated_at, recur, recur_until)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		columnID, title, desc, content, pos, due, end, priority, assignee, by, now, now, recur, until)
+		INSERT INTO cards (column_id, title, description, content, position, due_at, end_at, priority, assignee_id, created_by, created_at, updated_at, recur, recur_until, first_due)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		columnID, title, desc, content, pos, due, end, priority, assignee, by, now, now, recur, until, due)
 	if err != nil {
 		return Card{}, err
 	}
@@ -167,8 +168,9 @@ func (s *Store) UpdateCard(ctx context.Context, id int64, in CardInput) (Card, e
 			if !validDue(*in.DueAt) {
 				return Card{}, invalid("마감은 YYYY-MM-DD 또는 YYYY-MM-DDTHH:MM 형식이어야 해요")
 			}
-			sets = append(sets, "due_at=?")
-			args = append(args, *in.DueAt)
+			// 처음 정한 마감은 한 번만 적는다(미뤄도 남는다).
+			sets = append(sets, "due_at=?", "first_due=COALESCE(first_due, ?)")
+			args = append(args, *in.DueAt, *in.DueAt)
 		}
 	}
 	if in.EndAt != nil {
@@ -295,6 +297,7 @@ func (s *Store) GetCardDetail(ctx context.Context, id int64) (CardDetail, error)
 // MoveCard 는 splice 의미론으로 옮긴다: 원래 칸에서 빼 간격을 닫고, 대상 칸에 끼운다.
 // newPos 는 [0, len(dest)] 로 자른다.
 func (s *Store) MoveCard(ctx context.Context, id, toColumn int64, newPos int) (Card, error) {
+	var reward *TaskReward
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return Card{}, err
@@ -355,6 +358,9 @@ func (s *Store) MoveCard(ctx context.Context, id, toColumn int64, newPos int) (C
 			if _, err := tx.ExecContext(ctx, `UPDATE cards SET done_at=? WHERE id=?`, time.Now().Unix(), id); err != nil {
 				return Card{}, err
 			}
+			if reward, err = taskReward(ctx, tx, id, time.Now()); err != nil {
+				return Card{}, err
+			}
 		} else if _, err := tx.ExecContext(ctx, `UPDATE cards SET done_at=NULL, archived_at=NULL WHERE id=?`, id); err != nil {
 			return Card{}, err
 		}
@@ -365,7 +371,48 @@ func (s *Store) MoveCard(ctx context.Context, id, toColumn int64, newPos int) (C
 	if err := tx.Commit(); err != nil {
 		return Card{}, err
 	}
-	return s.GetCard(ctx, id)
+	c, err := s.GetCard(ctx, id)
+	c.Reward = reward
+	return c, err
+}
+
+// TaskReward 는 할 일을 끝냈을 때의 판정. 처음 정한 마감 안이면 물방울을 받고, 넘겼으면 받지 않는다.
+type TaskReward struct {
+	OnTime   bool   `json:"on_time"`
+	FirstDue string `json:"first_due"`
+	Drops    int64  `json:"drops"` // 이번에 받은 물방울(이미 받았거나 늦었으면 0)
+}
+
+const taskRewardDrops = 2
+
+func taskReward(ctx context.Context, tx *sql.Tx, id int64, now time.Time) (*TaskReward, error) {
+	var first sql.NullString
+	var title string
+	if err := tx.QueryRowContext(ctx, `SELECT first_due, title FROM cards WHERE id=?`, id).Scan(&first, &title); err != nil {
+		return nil, err
+	}
+	if !first.Valid || first.String == "" {
+		return nil, nil // 마감 없는 할 일은 판정하지 않는다
+	}
+	r := &TaskReward{FirstDue: first.String}
+	// 시각까지 정했으면 그 시각까지, 날짜만이면 그날 끝까지.
+	if len(first.String) > 10 {
+		r.OnTime = now.Format("2006-01-02T15:04") <= first.String
+	} else {
+		r.OnTime = now.Format("2006-01-02") <= first.String
+	}
+	if !r.OnTime {
+		return r, nil
+	}
+	res, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO family_drops (key, amount, day, label) VALUES (?, ?, ?, ?)`,
+		fmt.Sprintf("task:%d", id), taskRewardDrops, now.Format("2006-01-02"), "할 일 · "+title+" (마감 지킴)")
+	if err != nil {
+		return nil, err
+	}
+	if n, _ := res.RowsAffected(); n > 0 {
+		r.Drops = taskRewardDrops
+	}
+	return r, nil
 }
 
 // spawnNextOccurrence 는 완료된 반복 카드의 다음 회차를 첫 칸에 새 행으로 만든다.
@@ -423,9 +470,9 @@ func spawnNextOccurrence(ctx context.Context, tx *sql.Tx, id, toColumn int64) er
 	now := time.Now().Unix()
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO cards (column_id, title, description, content, position, due_at, end_at, priority,
-		                   assignee_id, created_by, created_at, updated_at, recur, recur_until, recur_parent_id)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		firstCol, title, desc, content, pos, next, nextEnd, priority, assignee, by, now, now, *recur, until, id); err != nil {
+		                   assignee_id, created_by, created_at, updated_at, recur, recur_until, recur_parent_id, first_due)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		firstCol, title, desc, content, pos, next, nextEnd, priority, assignee, by, now, now, *recur, until, id, next); err != nil {
 		return err
 	}
 	_, err = tx.ExecContext(ctx, `UPDATE cards SET recur=NULL WHERE id=?`, id)

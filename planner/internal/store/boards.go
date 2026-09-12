@@ -28,17 +28,18 @@ type Column struct {
 
 // Card is a task on a column.
 type Card struct {
-	ID            int64   `json:"id"`
-	ColumnID      int64   `json:"column_id"`
-	Title         string  `json:"title"`
-	Description   string  `json:"description"` // content에서 파생한 평문 (미리보기·검색용)
-	Content       *string `json:"content"`     // 권위 있는 본문. 블록 문서 JSON
-	Position      int     `json:"position"`
-	DueAt         *string `json:"due_at"` // 'YYYY-MM-DD' 또는 'YYYY-MM-DDTHH:MM'
-	EndAt         *string `json:"end_at"` // 여러 날 항목의 끝. 없으면 하루짜리
-	Recur         *string `json:"recur"`
-	RecurUntil    *string `json:"recur_until"`
-	RecurParentID *int64  `json:"recur_parent_id"`
+	ID            int64       `json:"id"`
+	ColumnID      int64       `json:"column_id"`
+	Title         string      `json:"title"`
+	Description   string      `json:"description"` // content에서 파생한 평문 (미리보기·검색용)
+	Content       *string     `json:"content"`     // 권위 있는 본문. 블록 문서 JSON
+	Position      int         `json:"position"`
+	DueAt         *string     `json:"due_at"`           // 'YYYY-MM-DD' 또는 'YYYY-MM-DDTHH:MM'
+	Reward        *TaskReward `json:"reward,omitempty"` // 방금 완료 칸으로 옮겼을 때만
+	EndAt         *string     `json:"end_at"`           // 여러 날 항목의 끝. 없으면 하루짜리
+	Recur         *string     `json:"recur"`
+	RecurUntil    *string     `json:"recur_until"`
+	RecurParentID *int64      `json:"recur_parent_id"`
 	// RecurLabel 은 규칙을 사람이 읽는 말로 옮긴 것.
 	RecurLabel string `json:"recur_label"`
 	Priority   int    `json:"priority"` // 0=없음, 1~3
