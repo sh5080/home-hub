@@ -103,7 +103,7 @@ function GoalForm({ goal, names, onSave, onDelete }: {
                 className={`rounded-lg px-2 py-1 text-xs ${on ? 'bg-accent text-accent-ink' : 'bg-surface-2 text-muted'}`}>{n}</button>
             )
           })}
-          {names.length === 0 && <p className="text-xs text-faint">재정에 파일을 올리면 고를 수 있어요.</p>}
+          {names.length === 0 && <p className="text-xs text-faint">자산에 파일을 올리면 고를 수 있어요.</p>}
         </div>
       </Field>
       {err && <p className="text-xs text-rose-500">{err}</p>}

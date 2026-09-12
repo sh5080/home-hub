@@ -1,10 +1,12 @@
 import { useRef, useState } from 'react'
+import { useInfiniteQuery } from '@tanstack/react-query'
 import { api, importFinance, type FinFixed, type FinIncome, type FinMonth, type FinFormat, type FinImportResult, type FinItem, type FinOverview } from '../api'
 import { useFinance, useFinFormat, useInvalidating, useMe, useUsers } from '../lib/hooks'
 import { fmtWon, fmtWonShort } from '../lib/date'
 import { Button, Field, Input, PageHeader, Sheet, SkeletonList } from '../components/ui'
-import { TAG_STYLE, TagChip, TagChips, TagPicker } from '../components/FinTags'
+import { TAG_STYLE, TagChip, TagChips, TagPicker, type TagTarget } from '../components/FinTags'
 import { FinItemSheet, type FinItemTarget } from '../components/FinItemSheet'
+import { Wallets } from '../components/FinWallets'
 
 // 재정. 가계부 앱에서 내보낸 파일을 사람별로 올려 쌓고, 합쳐서도 각자로도 본다. 어느 앱인지·규격은 서버 설정(finance-format.json).
 const GROUP_LABEL: Record<string, string> = {
@@ -20,7 +22,7 @@ export default function Finance() {
   const [month, setMonth] = useState<string | undefined>(undefined)
   const [uploading, setUploading] = useState<number | null>(null)
   const fmt = useFinFormat().data
-  const [tagging, setTagging] = useState<{ keys: string[]; label: string } | null>(null)
+  const [tagging, setTagging] = useState<TagTarget | null>(null)
   const [tagFilter, setTagFilter] = useState<number | null>(null)
   const [detail, setDetail] = useState<FinItemTarget | null>(null)
   const q = useFinance(owner, month)
@@ -30,7 +32,7 @@ export default function Finance() {
 
   return (
     <div className="mx-auto max-w-lg pb-6">
-      <PageHeader title="재정" right={<Button variant="ghost" onClick={() => setUploading(owner)}>+ 파일</Button>} />
+      <PageHeader title="자산" right={<Button variant="ghost" onClick={() => setUploading(owner)}>+ 파일</Button>} />
 
       <div className="flex gap-1.5 px-4 pt-2">
         {[{ id: 0, name: '우리집' }, ...people].map((u) => (
@@ -49,19 +51,24 @@ export default function Finance() {
         <>
           <UploadStatus d={d} people={owner ? people.filter((u) => u.id === owner) : people} onUpload={(id) => setUploading(id)} />
           <NetWorth d={d} name={name} />
-          <Plan d={d} />
+          <Plan d={d} onShowRegular={() => {
+            if (d.months.length) setMonth(d.months[d.months.length - 1].month) // 이번 달(기본은 지난달)
+            setTimeout(() => document.getElementById('fin-regular')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50)
+          }} />
+          <Wallets d={d} owner={owner} people={people} name={name} Card={Card} />
           <Flow d={d} />
-          <FixedIncome d={d} onOpen={setDetail} filter={tagFilter} onTag={setTagging} onClearFilter={() => setTagFilter(null)} />
-          <UnexpectedIncome d={d} onOpen={setDetail} onMonth={setMonth} filter={tagFilter} onTag={setTagging} onClearFilter={() => setTagFilter(null)} />
+          <FixedIncome d={d} owner={owner} onOpen={setDetail} filter={tagFilter} onTag={setTagging} onClearFilter={() => setTagFilter(null)} />
+          <UnexpectedIncome d={d} owner={owner} onOpen={setDetail} onMonth={setMonth} filter={tagFilter} onTag={setTagging} onClearFilter={() => setTagFilter(null)} />
           <TagSpend d={d} filter={tagFilter} onFilter={setTagFilter} />
-          <Fixed d={d} onOpen={setDetail} filter={tagFilter} onTag={setTagging} onClearFilter={() => setTagFilter(null)} />
-          <Unexpected d={d} onOpen={setDetail} onMonth={setMonth} filter={tagFilter} onTag={setTagging} onClearFilter={() => setTagFilter(null)} />
+          <Fixed d={d} owner={owner} onOpen={setDetail} filter={tagFilter} onTag={setTagging} onClearFilter={() => setTagFilter(null)} />
+          <Regular d={d} owner={owner} onOpen={setDetail} onMonth={setMonth} filter={tagFilter} onTag={setTagging} onClearFilter={() => setTagFilter(null)} />
+          <Unexpected d={d} owner={owner} onOpen={setDetail} onMonth={setMonth} filter={tagFilter} onTag={setTagging} onClearFilter={() => setTagFilter(null)} />
           <Assets items={d.items} name={name} many={d.owners.length > 1} />
         </>
       )}
 
-      {d && <FinItemSheet target={detail} owner={owner} d={d} onClose={() => setDetail(null)} onTag={setTagging} />}
-      {d && <TagPicker target={tagging} tags={d.tags} links={d.tag_links} onClose={() => setTagging(null)} />}
+      {d && <FinItemSheet target={detail} owner={owner} d={d} onClose={() => setDetail(null)} />}
+      {d && <TagPicker target={tagging} tags={d.tags} onClose={() => setTagging(null)} />}
       <UploadSheet open={uploading !== null} onClose={() => setUploading(null)} people={people} fmt={fmt}
         defaultOwner={uploading || me.data?.id || 0} />
     </div>
@@ -71,7 +78,7 @@ export default function Finance() {
 function EmptyOwner({ who, fmt, onUpload }: { who: string | null; fmt?: FinFormat; onUpload: () => void }) {
   return (
     <div className="mx-4 mt-6 rounded-2xl border border-dashed border-line px-4 py-8 text-center">
-      <p className="text-sm font-semibold text-ink-2">{who ? `${who}님의 재정은 아직 비어 있어요` : '아직 올린 파일이 없어요'}</p>
+      <p className="text-sm font-semibold text-ink-2">{who ? `${who}님의 자산은 아직 비어 있어요` : '아직 올린 파일이 없어요'}</p>
       <p className="mt-1 text-xs text-muted">
         {fmt?.configured ? `${fmt.source_name}에서 받은 파일을 올리면 자산·지출이 채워져요.` : '파일 규격이 아직 설정되지 않아 올릴 수 없어요.'}
       </p>
@@ -120,7 +127,7 @@ function Card({ id, title, children, right, summary }: { id?: string; title: str
     try { if (v) localStorage.removeItem(storeKey); else localStorage.setItem(storeKey, '0') } catch { /* 저장 못 해도 동작은 한다 */ }
   }
   return (
-    <section className="mx-4 mt-3 rounded-2xl bg-surface p-4 shadow-sm">
+    <section id={id ? `fin-${id}` : undefined} className="mx-4 mt-3 scroll-mt-16 rounded-2xl bg-surface p-4 shadow-sm">
       <div className={`flex items-center justify-between gap-2 ${open ? 'mb-2' : ''}`}>
         <button type="button" onClick={toggle} aria-expanded={open} className="-m-1 flex min-w-0 flex-1 items-center gap-1 rounded-lg p-1 text-left">
           <h2 className="text-sm font-bold text-ink-2">{title}</h2>
@@ -178,6 +185,38 @@ function ExpandRow({ label, value, items }: { label: string; value: number; item
   )
 }
 
+/** 이번 달: 쓸 수 있는 돈에서 쓴 돈(지역화폐 포함)을 뺀 것과, 이 속도면 월말에 얼마가 되는지. */
+function MonthProgress({ d, onShow }: { d: FinOverview; onShow: () => void }) {
+  const p = d.plan
+  if (p.spendable <= 0) return null
+  const left = p.spendable - p.month_spent
+  const other = p.month_spent - p.month_wallet
+  const pace = p.days_passed > 0 ? Math.round((p.month_spent / p.days_passed) * p.days_in_month) : 0
+  const pct = (v: number) => `${Math.min(100, Math.max(0, (v / p.spendable) * 100))}%`
+  return (
+    <div className="mt-3 rounded-xl bg-surface-2 p-3">
+      <div className="flex items-baseline justify-between text-sm">
+        <span className="font-semibold">이번 달 남은 돈</span>
+        <span className={`font-bold tabular-nums ${left < 0 ? 'text-rose-500' : ''}`}>{fmtWon(left)}</span>
+      </div>
+      <div className="relative mt-2 flex h-2 overflow-hidden rounded-full bg-line">
+        <div className="h-2 bg-amber-400" style={{ width: pct(p.month_wallet) }} />
+        <div className="h-2 bg-rose-400" style={{ width: pct(other) }} />
+        <div className="absolute inset-y-0 w-px bg-ink/50" style={{ left: `${(p.days_passed / p.days_in_month) * 100}%` }} />
+      </div>
+      <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-muted">
+        <button type="button" onClick={onShow} className="underline decoration-dotted"><i className="mr-1 inline-block h-2 w-2 rounded-sm bg-amber-400" />지역화폐 {fmtWon(p.month_wallet)}</button>
+        <button type="button" onClick={onShow} className="underline decoration-dotted"><i className="mr-1 inline-block h-2 w-2 rounded-sm bg-rose-400" />그 외 {fmtWon(other)}</button>
+        <span className="text-faint">{p.days_passed}/{p.days_in_month}일</span>
+      </div>
+      {p.month_unexpected > 0 && <p className="mt-0.5 text-[11px] text-faint">예상 외 지출 {fmtWon(p.month_unexpected)}은 빼고 셌어요.</p>}
+      <p className={`mt-1 text-[11px] ${pace > p.spendable ? 'text-rose-500' : 'text-faint'}`}>
+        이 속도면 월말까지 {fmtWon(pace)} — {pace > p.spendable ? `${fmtWon(pace - p.spendable)} 넘어요` : `${fmtWon(p.spendable - pace)} 남아요`}
+      </p>
+    </div>
+  )
+}
+
 /** 남겨둘 생활비 줄. 누르면 근거(최근 6개월 월별 쓴 돈)를 펼친다. */
 function BufferBasis({ d }: { d: FinOverview }) {
   const p = d.plan
@@ -212,7 +251,7 @@ function BufferBasis({ d }: { d: FinOverview }) {
   )
 }
 
-function Plan({ d }: { d: FinOverview }) {
+function Plan({ d, onShowRegular }: { d: FinOverview; onShowRegular: () => void }) {
   const p = d.plan
   const [editing, setEditing] = useState(false)
   const [income, setIncome] = useState('')
@@ -228,7 +267,8 @@ function Plan({ d }: { d: FinOverview }) {
   return (
     <Card title="한 달에 쓸 수 있는 돈" summary={<span className={`text-sm font-bold tabular-nums ${p.spendable < 0 ? 'text-rose-500' : ''}`}>{fmtWon(p.spendable)}</span>} right={<button onClick={() => { setIncome(String(p.income_base || '')); setEditing(true) }} className="text-xs text-muted underline">기준 바꾸기</button>}>
       <p className={`text-2xl font-bold tabular-nums ${p.spendable < 0 ? 'text-rose-500' : ''}`}>{fmtWon(p.spendable)}</p>
-      <p className="mt-0.5 text-xs text-muted">최근 3개월 변동지출 평균(예상 외 뺌) {fmtWon(p.variable_avg)}{p.variable_avg > p.spendable && p.spendable > 0 && ' — 기준보다 더 쓰고 있어요'}</p>
+      <MonthProgress d={d} onShow={onShowRegular} />
+      <p className="mt-2 text-xs text-muted">최근 3개월 변동지출 평균(예상 외 뺌) {fmtWon(p.variable_avg)}{p.variable_avg > p.spendable && p.spendable > 0 && ' — 기준보다 더 쓰고 있어요'}</p>
       <div className="mt-3 space-y-1 border-t border-line pt-2">
         {row(p.income_base ? '월 수입(정한 값)' : '월 수입(고정수입 한 달 보통)', base, '')}
         <ExpandRow label="고정지출" value={p.fixed_spend} items={mergeFixed(d.fixed.filter((f) => f.fixed && f.kind === 'spend'))} />
@@ -295,6 +335,11 @@ const pairsFor = (keys: string[], want: boolean, auto: boolean): Pair[] => keys.
 function useSetFixed() {
   return useInvalidating((pairs: Pair[]) => Promise.all(pairs.map(([key, fixed]) => api.post('/api/finance/fixed', { key, fixed }))), [['finance']])
 }
+// '평소': 고정도 예상 외도 아닌 평소 지출로 둔다.
+function useSetRegular() {
+  return useInvalidating((keys: string[]) => Promise.all(keys.map((key) => api.post('/api/finance/regular', { key }))), [['finance']])
+}
+
 // '지출 아님': spend=false 면 쓴 돈에서 뺀다.
 function useSetSpend() {
   return useInvalidating((b: { keys: string[]; spend: boolean }) => Promise.all(b.keys.map((key) => api.post('/api/finance/spend', { key, spend: b.spend }))), [['finance']])
@@ -335,11 +380,17 @@ function mergeFixed(xs: FinFixed[]): FixedRow[] {
 }
 const datesOf = (ats: string[]) => uniq(ats.map((a) => a.slice(5, 10).replace('-', '/'))).sort().join(', ')
 
+// 항목 메모. 이름은 거래를 묶는 기준이라 고치지 않고, 설명은 메모에 적는다.
+const memoOf = (d: FinOverview, keys: string[]) => keys.map((k) => d.labels?.[k]?.memo).find(Boolean) ?? ''
+const MemoLine = ({ d, keys }: { d: FinOverview; keys: string[] }) => {
+  const m = memoOf(d, keys)
+  return m ? <p className="truncate text-[11px] text-ink-2">{m}</p> : null
+}
+
 const Edited = () => <span className="ml-1 rounded bg-surface-2 px-1 text-[10px] text-muted">수정됨</span>
 const Count = ({ n }: { n: number }) => (n > 1 ? <span className="ml-1 text-[11px] font-normal text-faint">{n}건</span> : null)
 
-type TagTarget = { keys: string[]; label: string }
-type TagProps = { onOpen: (t: FinItemTarget) => void; filter: number | null; onTag: (t: TagTarget) => void; onClearFilter: () => void }
+type TagProps = { owner: number; onOpen: (t: FinItemTarget) => void; filter: number | null; onTag: (t: TagTarget) => void; onClearFilter: () => void }
 
 function FilterNote({ d, filter, onClear }: { d: FinOverview; filter: number | null; onClear: () => void }) {
   const t = d.tags.find((x) => x.id === filter)
@@ -370,6 +421,71 @@ function Tucked({ title, count, children }: { title: string; count: number; chil
 const MoveBtn = ({ children, onClick }: { children: React.ReactNode; onClick: () => void }) => (
   <button type="button" onClick={onClick} className="shrink-0 rounded-md border border-line px-2 py-1 text-[11px] font-medium text-ink-2 hover:bg-surface-2">{children}</button>
 )
+
+// 태그가 없으면 아직 분류하지 않은 것으로 본다. 고정 항목은 항목(key) 태그, 나머지는 거래(ref) 태그.
+const untagged = (d: FinOverview, keys: string[]) => !keys.some((k) => (d.tag_links[k] ?? []).length > 0)
+const txTagsOf = (d: FinOverview, refs: string[]) => uniq(refs.flatMap((r) => d.tx_tags?.[r] ?? []))
+const hasTxTag = (d: FinOverview, refs: string[], filter: number | null) => filter === null || txTagsOf(d, refs).includes(filter)
+// 같은 이름의 다른 거래에 썼던 태그 — 제안으로만.
+const txTarget = (d: FinOverview, label: string, refs: string[], keys: string[]): TagTarget => {
+  const cur = txTagsOf(d, refs)
+  return { label, refs, cur, suggest: uniq(keys.flatMap((k) => d.key_tx_tags?.[k] ?? [])).filter((id) => !cur.includes(id)) }
+}
+
+/** 미분류 보기의 헤더 버튼과 월 선택. 미분류 모드에선 월 선택 대신 닫기. */
+function CardTools({ d, un, setUn, onMonth }: { d: FinOverview; un: boolean; setUn: (v: boolean) => void; onMonth?: (m: string) => void }) {
+  return un ? (
+    <button type="button" onClick={() => setUn(false)} className="rounded-md bg-accent px-2 py-1 text-xs font-medium text-accent-ink">미분류 닫기</button>
+  ) : (
+    <span className="flex items-center gap-1.5">
+      <button type="button" onClick={() => setUn(true)} className="rounded-md border border-line px-2 py-1 text-xs text-muted hover:bg-surface-2">미분류</button>
+      {onMonth && <MonthSelect d={d} onMonth={onMonth} />}
+    </span>
+  )
+}
+
+/**
+ * 미분류 보기: 서버가 최근 달부터(달 안에선 큰 금액부터) 100개씩 준다. '더 불러오기'로 다음 100개.
+ * 받은 걸 달별로 다시 묶어 카드의 줄 그리기(render)에 한 달씩 넘긴다.
+ */
+type FeedKind = 'regular' | 'unexpected' | 'income'
+function UntaggedFeed({ owner, kind, render }: { d: FinOverview; owner: number; kind: FeedKind; render: (page: FinOverview) => React.ReactNode | null }) {
+  const q = useInfiniteQuery({
+    queryKey: ['finance', 'untagged', owner, kind],
+    queryFn: ({ pageParam }) => api.get<{ page: FinOverview; total: number; offset: number }>(`/api/finance/untagged?owner=${owner}&kind=${kind}&offset=${pageParam}`),
+    initialPageParam: 0,
+    getNextPageParam: (last) => (last.offset + 100 < last.total ? last.offset + 100 : undefined),
+  })
+  const pages = q.data?.pages ?? []
+  const base = pages[pages.length - 1]?.page
+  const list = (p: FinOverview) => (kind === 'regular' ? p.regular : kind === 'unexpected' ? p.unexpected : p.income_tx) as { at: string }[]
+  const items = pages.flatMap((pg) => list(pg.page))
+  const months = uniq(items.map((x) => x.at.slice(0, 7)))
+  const total = pages[0]?.total ?? 0
+  return (
+    <div>
+      {q.isPending && <SkeletonList rows={3} />}
+      {!q.isPending && total === 0 && <p className="text-xs text-faint">모두 분류했어요.</p>}
+      {base && total > 0 && <p className="mb-1 text-xs text-muted">미분류 {total.toLocaleString()}건 중 {items.length.toLocaleString()}건</p>}
+      {base && months.map((m) => {
+        const inMonth = items.filter((x) => x.at.startsWith(m))
+        const page = { ...base, [kind === 'income' ? 'income_tx' : kind]: inMonth } as FinOverview
+        return (
+          <section key={m} className="mb-2">
+            <h3 className="border-b border-line py-1 text-xs font-semibold text-ink-2">{m.slice(0, 4)}년 {Number(m.slice(5))}월</h3>
+            {render(page)}
+          </section>
+        )
+      })}
+      {q.hasNextPage && (
+        <Button variant="ghost" className="mt-1 w-full" disabled={q.isFetchingNextPage} onClick={() => q.fetchNextPage()}>
+          {q.isFetchingNextPage ? '불러오는 중…' : `더 불러오기 (${Math.min(100, total - items.length)}건)`}
+        </Button>
+      )}
+      <p className="mt-2 text-[11px] text-faint">태그가 없는 거래예요(1,000원 미만은 생략). '+ 태그'로 분류하면 목록에서 빠져요.</p>
+    </div>
+  )
+}
 
 function MonthSelect({ d, onMonth }: { d: FinOverview; onMonth: (m: string) => void }) {
   const months = d.months.map((m) => m.month).reverse()
@@ -413,12 +529,13 @@ function MonthBars({ d, pick, color }: { d: FinOverview; pick: (m: FinMonth) => 
 
 function FixedIncome({ d, onOpen, filter, onTag, onClearFilter }: { d: FinOverview } & TagProps) {
   const setFixed = useSetFixed()
-  const on = mergeIncome(d.income.filter((f) => f.income && f.fixed)).filter((f) => hasTag(d, f.keys, filter))
+  const [un, setUn] = useState(false)
+  const on = mergeIncome(d.income.filter((f) => f.income && f.fixed)).filter((f) => hasTag(d, f.keys, filter) && (!un || untagged(d, f.keys)))
   const move = (f: IncomeRow, want: boolean) => setFixed.mutate(f.members.flatMap((m) => pairsFor(m.keys, want, m.fixed_auto)))
   return (
-    <Card id="fixed-income" title="고정수입" right={<span className="text-xs text-muted">연 월평균 {fmtWon(yearAvg(d, (m) => m.fixed_in))}</span>}>
+    <Card id="fixed-income" title="고정수입" right={<span className="flex items-center gap-1.5">{!un && <span className="text-xs text-muted">연 월평균 {fmtWon(yearAvg(d, (m) => m.fixed_in))}</span>}<CardTools d={d} un={un} setUn={setUn} /></span>}>
       <FilterNote d={d} filter={filter} onClear={onClearFilter} />
-      {on.length === 0 && <p className="text-xs text-faint">최근 6개월에 3달 이상 들어온 수입이 없어요. 예상 외 수입에서 '고정'을 눌러 옮길 수 있어요.</p>}
+      {on.length === 0 && <p className="text-xs text-faint">{un ? '고정수입은 모두 분류했어요.' : "최근 6개월에 3달 이상 들어온 수입이 없어요. 예상 외 수입에서 '고정'을 눌러 옮길 수 있어요."}</p>}
       <ul className="divide-y divide-line">
         {on.map((f) => (
           <li key={f.label} className="flex items-center gap-2 py-2">
@@ -427,10 +544,11 @@ function FixedIncome({ d, onOpen, filter, onTag, onClearFilter }: { d: FinOvervi
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm">{f.label}{f.edited && <Edited />}</p>
                   <p className="text-[11px] text-faint">{f.cat1 || '미분류'} · 최근 6개월 중 {f.months6}달{f.fixed_override !== null && ' · 직접 정함'}</p>
+                  <MemoLine d={d} keys={f.keys} />
                 </div>
                 <span className="shrink-0 text-sm tabular-nums">{fmtWonShort(f.monthly)}</span>
               </button>
-              <TagChips ids={d.tag_links[f.keys[0]]} tags={d.tags} onEdit={() => onTag({ keys: f.keys, label: f.label })} />
+              <TagChips ids={d.tag_links[f.keys[0]]} tags={d.tags} onEdit={() => onTag({ keys: f.keys, label: f.label, cur: d.tag_links[f.keys[0]] ?? [] })} />
             </div>
             <MoveBtn onClick={() => move(f, false)}>예상 외</MoveBtn>
           </li>
@@ -442,59 +560,71 @@ function FixedIncome({ d, onOpen, filter, onTag, onClearFilter }: { d: FinOvervi
   )
 }
 
-function UnexpectedIncome({ d, onOpen, onMonth, filter, onTag, onClearFilter }: { d: FinOverview; onMonth: (m: string) => void } & TagProps) {
+function UnexpectedIncome({ d, owner, onOpen, onMonth, filter, onTag, onClearFilter }: { d: FinOverview; onMonth: (m: string) => void } & TagProps) {
   const setFixed = useSetFixed()
   const setIncome = useSetIncome()
-  const byKey = new Map(d.income.map((f) => [f.key, f]))
-  const rows = byTitle(d.income_tx.filter((t) => hasTag(d, t.keys, filter)), (t) => t.content).map((g) => ({
-    content: g[0].content, cat1: g[0].cat1, count: g.length, dates: datesOf(g.map((t) => t.at)),
-    amount: g.reduce((a, t) => a + t.amount, 0), keys: uniq(g.flatMap((t) => t.keys)), edited: g.some((t) => t.edited),
-    groups: uniq(g.map((t) => t.group)).map((k) => byKey.get(k)).filter((x): x is FinIncome => !!x),
-  }))
+  const [un, setUn] = useState(false)
+  const rowsOf = (dd: FinOverview, only: boolean) => {
+    const byKey = new Map(dd.income.map((f) => [f.key, f]))
+    return byTitle(dd.income_tx.filter((t) => (only ? txTagsOf(dd, [t.ref]).length === 0 : hasTxTag(dd, [t.ref], filter))), (t) => t.content).map((g) => ({
+      refs: g.map((t) => t.ref),
+      content: g[0].content, cat1: g[0].cat1, count: g.length, dates: datesOf(g.map((t) => t.at)),
+      amount: g.reduce((a, t) => a + t.amount, 0), keys: uniq(g.flatMap((t) => t.keys)), edited: g.some((t) => t.edited),
+      groups: uniq(g.map((t) => t.group)).map((k) => byKey.get(k)).filter((x): x is FinIncome => !!x),
+    }))
+  }
+  const item = (t: ReturnType<typeof rowsOf>[number], dd: FinOverview) => (
+    <li key={t.content} className="flex items-center gap-2 py-2">
+      <div className="min-w-0 flex-1">
+        <button type="button" onClick={() => onOpen({ keys: t.keys, label: t.content, cat1: t.cat1 })} className="-mx-1 block w-full rounded-lg px-1 py-0.5 text-left">
+          <div className="flex items-baseline gap-2">
+            <span className="min-w-0 flex-1 truncate text-sm">{t.content}<Count n={t.count} />{t.edited && <Edited />}</span>
+            <span className="shrink-0 text-sm font-semibold tabular-nums text-emerald-700">{fmtWon(t.amount)}</span>
+          </div>
+          <p className="truncate text-[11px] text-faint">{t.dates} · {t.cat1 || '미분류'}</p>
+          <MemoLine d={dd} keys={t.keys} />
+        </button>
+        <TagChips ids={txTagsOf(dd, t.refs)} tags={dd.tags} onEdit={() => onTag(txTarget(dd, t.content, t.refs, t.keys))} />
+      </div>
+      <div className="flex shrink-0 flex-col items-end gap-1">
+        <MoveBtn onClick={() => setFixed.mutate(t.groups.flatMap((g) => pairsFor(g.keys, true, g.fixed_auto)))}>고정</MoveBtn>
+        <button type="button" onClick={() => setIncome.mutate(t.groups.flatMap((g) => pairsFor(g.keys, false, g.auto)))} className="text-[11px] text-faint underline">수입 아님</button>
+      </div>
+    </li>
+  )
+  const rows = rowsOf(d, false)
   const total = rows.reduce((a, t) => a + t.amount, 0)
   const notIncome = mergeIncome(d.income.filter((f) => !f.income))
   return (
-    <Card id="unexpected-income" title="예상 외 수입" right={<MonthSelect d={d} onMonth={onMonth} />}>
-      <FilterNote d={d} filter={filter} onClear={onClearFilter} />
-      {rows.length === 0 ? (
-        <p className="text-xs text-faint">이 달엔 고정수입 말고 들어온 수입이 없어요.</p>
+    <Card id="unexpected-income" title="예상 외 수입" right={<CardTools d={d} un={un} setUn={setUn} onMonth={onMonth} />}>
+      {un ? (
+        <UntaggedFeed d={d} owner={owner} kind="income" render={(p) => { const rs = rowsOf(p, true); return rs.length ? <ul className="divide-y divide-line">{rs.map((t) => item(t, p))}</ul> : null }} />
       ) : (
         <>
-          <p className="mb-1 text-xs text-muted">{rows.length}개 · {fmtWon(total)}</p>
-          <ul className="divide-y divide-line">
-            {rows.map((t) => (
-              <li key={t.content} className="flex items-center gap-2 py-2">
-                <div className="min-w-0 flex-1">
-                  <button type="button" onClick={() => onOpen({ keys: t.keys, label: t.content, cat1: t.cat1 })} className="-mx-1 block w-full rounded-lg px-1 py-0.5 text-left">
-                    <div className="flex items-baseline gap-2">
-                      <span className="min-w-0 flex-1 truncate text-sm">{t.content}<Count n={t.count} />{t.edited && <Edited />}</span>
-                      <span className="shrink-0 text-sm font-semibold tabular-nums text-emerald-700">{fmtWon(t.amount)}</span>
-                    </div>
-                    <p className="truncate text-[11px] text-faint">{t.dates} · {t.cat1 || '미분류'}</p>
-                  </button>
-                  <TagChips ids={d.tag_links[t.keys[0]]} tags={d.tags} onEdit={() => onTag({ keys: t.keys, label: t.content })} />
-                </div>
-                <div className="flex shrink-0 flex-col items-end gap-1">
-                  <MoveBtn onClick={() => setFixed.mutate(t.groups.flatMap((g) => pairsFor(g.keys, true, g.fixed_auto)))}>고정</MoveBtn>
-                  <button type="button" onClick={() => setIncome.mutate(t.groups.flatMap((g) => pairsFor(g.keys, false, g.auto)))} className="text-[11px] text-faint underline">수입 아님</button>
-                </div>
+          <FilterNote d={d} filter={filter} onClear={onClearFilter} />
+          {rows.length === 0 ? (
+            <p className="text-xs text-faint">이 달엔 고정수입 말고 들어온 수입이 없어요.</p>
+          ) : (
+            <>
+              <p className="mb-1 text-xs text-muted">{rows.length}개 · {fmtWon(total)}</p>
+              <ul className="divide-y divide-line">{rows.map((t) => item(t, d))}</ul>
+            </>
+          )}
+          <Tucked title="수입에서 뺀 입금" count={notIncome.length}>
+            {notIncome.map((f) => (
+              <li key={f.label} className="flex items-center gap-2 py-1.5">
+                <button type="button" onClick={() => onOpen({ keys: f.keys, label: f.label, cat1: f.cat1 })} className="min-w-0 flex-1 text-left">
+                  <p className="truncate text-sm text-muted">{f.label}{f.edited && <Edited />}</p>
+                  <p className="text-[11px] text-faint">{f.cat1 || '미분류'} · 최근 12개월 {f.months}달 · 합 {fmtWonShort(f.total)}</p>
+                  <MemoLine d={d} keys={f.keys} />
+                </button>
+                <MoveBtn onClick={() => setIncome.mutate(f.members.flatMap((m) => pairsFor(m.keys, true, m.auto)))}>수입으로</MoveBtn>
               </li>
             ))}
-          </ul>
+          </Tucked>
+          <p className="mt-2 text-[11px] text-faint">이름이 같은 건 합쳐서 보여요. 적금·예금 해지, 파킹통장 인출, 내 계좌·가족에게서 옮긴 돈은 내 돈이 돌아온 것이라 수입에서 빼요.</p>
         </>
       )}
-      <Tucked title="수입에서 뺀 입금" count={notIncome.length}>
-        {notIncome.map((f) => (
-          <li key={f.label} className="flex items-center gap-2 py-1.5">
-            <button type="button" onClick={() => onOpen({ keys: f.keys, label: f.label, cat1: f.cat1 })} className="min-w-0 flex-1 text-left">
-              <p className="truncate text-sm text-muted">{f.label}{f.edited && <Edited />}</p>
-              <p className="text-[11px] text-faint">{f.cat1 || '미분류'} · 최근 12개월 {f.months}달 · 합 {fmtWonShort(f.total)}</p>
-            </button>
-            <MoveBtn onClick={() => setIncome.mutate(f.members.flatMap((m) => pairsFor(m.keys, true, m.auto)))}>수입으로</MoveBtn>
-          </li>
-        ))}
-      </Tucked>
-      <p className="mt-2 text-[11px] text-faint">이름이 같은 건 합쳐서 보여요. 적금·예금 해지, 파킹통장 인출, 내 계좌·가족에게서 옮긴 돈은 내 돈이 돌아온 것이라 수입에서 빼요.</p>
     </Card>
   )
 }
@@ -502,7 +632,9 @@ function UnexpectedIncome({ d, onOpen, onMonth, filter, onTag, onClearFilter }: 
 function Fixed({ d, onOpen, filter, onTag, onClearFilter }: { d: FinOverview } & TagProps) {
   const setFixed = useSetFixed()
   const setSpend = useSetSpend()
-  const fixedOn = mergeFixed(d.fixed.filter((f) => f.fixed)).filter((f) => hasTag(d, f.keys, filter))
+  const setRegular = useSetRegular()
+  const [un, setUn] = useState(false)
+  const fixedOn = mergeFixed(d.fixed.filter((f) => f.fixed)).filter((f) => hasTag(d, f.keys, filter) && (!un || untagged(d, f.keys)))
   const on = fixedOn.filter((f) => f.kind === 'spend')
   const saves = fixedOn.filter((f) => f.kind === 'save')
   const move = (f: FixedRow, want: boolean) => setFixed.mutate(f.members.flatMap((m) => pairsFor([m.key], want, m.auto)))
@@ -513,21 +645,25 @@ function Fixed({ d, onOpen, filter, onTag, onClearFilter }: { d: FinOverview } &
           <div className="min-w-0 flex-1">
             <p className="truncate text-sm">{f.label}<Count n={f.members.length} />{f.edited && <Edited />}</p>
             <p className="text-[11px] text-faint">{f.cat1 || '미분류'} · 최근 6개월 중 {f.months}달{f.override !== null && ' · 직접 정함'}</p>
+            <MemoLine d={d} keys={f.keys} />
           </div>
           <span className="shrink-0 text-sm tabular-nums">{fmtWonShort(f.monthly)}</span>
         </button>
-        <TagChips ids={d.tag_links[f.keys[0]]} tags={d.tags} onEdit={() => onTag({ keys: f.keys, label: f.label })} />
+        <TagChips ids={d.tag_links[f.keys[0]]} tags={d.tags} onEdit={() => onTag({ keys: f.keys, label: f.label, cur: d.tag_links[f.keys[0]] ?? [] })} />
       </div>
       <div className="flex shrink-0 flex-col items-end gap-1">
         <MoveBtn onClick={() => move(f, false)}>예상 외</MoveBtn>
-        <NotBtn onClick={() => setSpend.mutate({ keys: f.keys, spend: false })}>{f.kind === 'save' ? '저축 아님' : '지출 아님'}</NotBtn>
+        <span className="flex gap-2">
+          {f.kind === 'spend' && <NotBtn onClick={() => setRegular.mutate(f.keys)}>평소</NotBtn>}
+          <NotBtn onClick={() => setSpend.mutate({ keys: f.keys, spend: false })}>{f.kind === 'save' ? '저축 아님' : '지출 아님'}</NotBtn>
+        </span>
       </div>
     </li>
   )
   return (
-    <Card id="fixed" title="고정지출" right={<span className="text-xs text-muted">연 월평균 {fmtWon(yearAvg(d, (m) => m.fixed + m.fixed_save))}</span>}>
+    <Card id="fixed" title="고정지출" right={<span className="flex items-center gap-1.5">{!un && <span className="text-xs text-muted">연 월평균 {fmtWon(yearAvg(d, (m) => m.fixed + m.fixed_save))}</span>}<CardTools d={d} un={un} setUn={setUn} /></span>}>
       <FilterNote d={d} filter={filter} onClear={onClearFilter} />
-      {fixedOn.length === 0 && <p className="text-xs text-faint">{filter === null ? '최근 6개월에 매달 비슷하게 나간 게 없어요.' : '이 태그가 붙은 고정지출이 없어요.'}</p>}
+      {fixedOn.length === 0 && <p className="text-xs text-faint">{un ? '고정지출은 모두 분류했어요.' : filter === null ? '최근 6개월에 매달 비슷하게 나간 게 없어요.' : '이 태그가 붙은 고정지출이 없어요.'}</p>}
       <ul className="divide-y divide-line">{on.map(row)}</ul>
       {saves.length > 0 && (
         <div className="mt-2 border-t border-line pt-2">
@@ -579,61 +715,137 @@ function TagSpend({ d, filter, onFilter }: { d: FinOverview; filter: number | nu
   )
 }
 
-function Unexpected({ d, onOpen, onMonth, filter, onTag, onClearFilter }: { d: FinOverview; onMonth: (m: string) => void } & TagProps) {
+/** 평소 지출: 고정도 예상 외도 아닌, '한 달에 쓸 수 있는 돈' 안에서 쓰는 돈. */
+function Regular({ d, owner, onOpen, onMonth, filter, onTag, onClearFilter }: { d: FinOverview; onMonth: (m: string) => void } & TagProps) {
   const setFixed = useSetFixed()
   const setSpend = useSetSpend()
+  const [un, setUn] = useState(false)
+  const [all, setAll] = useState(false)
+  const rowsOf = (dd: FinOverview, only: boolean) =>
+    byTitle(dd.regular.filter((u) => (only ? txTagsOf(dd, [u.ref]).length === 0 : hasTxTag(dd, [u.ref], filter))), (u) => u.content).map((g) => ({
+      refs: g.map((u) => u.ref),
+      content: g[0].content, cat1: g[0].cat1, count: g.length, dates: datesOf(g.map((u) => u.at)),
+      amount: g.reduce((a, u) => a + u.amount, 0), keys: uniq(g.map((u) => u.key)), edited: g.some((u) => u.edited),
+      wallet: g.some((u) => u.wallet),
+    })).sort((a, b) => b.amount - a.amount)
+  const item = (u: ReturnType<typeof rowsOf>[number], dd: FinOverview) => (
+    <li key={u.content} className="flex items-center gap-2 py-2">
+      <div className="min-w-0 flex-1">
+        <button type="button" onClick={() => onOpen({ keys: u.keys, label: u.content, cat1: u.cat1 })} className="-mx-1 block w-full rounded-lg px-1 py-0.5 text-left">
+          <div className="flex items-baseline gap-2">
+            <span className="min-w-0 flex-1 truncate text-sm">{u.content}<Count n={u.count} />{u.wallet && <span className="ml-1 rounded bg-amber-100 px-1 text-[10px] text-amber-800">지역화폐</span>}{u.edited && <Edited />}</span>
+            <span className="shrink-0 text-sm tabular-nums">{fmtWon(u.amount)}</span>
+          </div>
+          <p className="truncate text-[11px] text-faint">{u.dates} · {u.cat1 || '미분류'}</p>
+          <MemoLine d={dd} keys={u.keys} />
+        </button>
+        <TagChips ids={txTagsOf(dd, u.refs)} tags={dd.tags} onEdit={() => onTag(txTarget(dd, u.content, u.refs, u.keys))} />
+      </div>
+      <div className="flex shrink-0 flex-col items-end gap-1">
+        <span className="flex gap-1">
+          <MoveBtn onClick={() => setFixed.mutate(u.keys.map((k): Pair => [k, true]))}>고정</MoveBtn>
+          <MoveBtn onClick={() => setFixed.mutate(u.keys.map((k): Pair => [k, false]))}>예상 외</MoveBtn>
+        </span>
+        <NotBtn onClick={() => setSpend.mutate({ keys: u.keys, spend: false })}>지출 아님</NotBtn>
+      </div>
+    </li>
+  )
+  const rows = rowsOf(d, false)
+  const total = rows.reduce((a, u) => a + u.amount, 0)
+  const shown = all ? rows : rows.slice(0, 15)
+  return (
+    <Card id="regular" title="평소 지출" right={<CardTools d={d} un={un} setUn={setUn} onMonth={onMonth} />}>
+      {un ? (
+        <UntaggedFeed d={d} owner={owner} kind="regular" render={(p) => { const rs = rowsOf(p, true); return rs.length ? <ul className="divide-y divide-line">{rs.map((u) => item(u, p))}</ul> : null }} />
+      ) : (
+        <>
+          <FilterNote d={d} filter={filter} onClear={onClearFilter} />
+          {rows.length === 0 ? (
+            <p className="text-xs text-faint">이 달엔 평소 지출이 없어요.</p>
+          ) : (
+            <>
+              <p className="mb-1 text-xs text-muted">{rows.length}개 · {fmtWon(total)}{d.plan.spendable > 0 && d.month === d.months[d.months.length - 1]?.month && ` · 쓸 수 있는 돈 ${fmtWon(d.plan.spendable)} 중`}</p>
+              <ul className="divide-y divide-line">{shown.map((u) => item(u, d))}</ul>
+              {rows.length > 15 && <button onClick={() => setAll(!all)} className="mt-1 text-xs text-muted underline">{all ? '접기' : `${rows.length}개 모두 보기`}</button>}
+            </>
+          )}
+          <p className="mt-2 text-[11px] text-faint">고정도 예상 외도 아닌, '한 달에 쓸 수 있는 돈' 안에서 쓰는 돈이에요. 이름이 같은 건 합쳐서 보여요. 매달 나가면 '고정', 일시적인 큰 돈이면 '예상 외'로 옮겨요.</p>
+        </>
+      )}
+    </Card>
+  )
+}
+
+function Unexpected({ d, owner, onOpen, onMonth, filter, onTag, onClearFilter }: { d: FinOverview; onMonth: (m: string) => void } & TagProps) {
+  const setFixed = useSetFixed()
+  const setSpend = useSetSpend()
+  const setRegular = useSetRegular()
+  const [un, setUn] = useState(false)
   const notSpend = byTitle(d.not_spend, (x) => x.label).map((g) => ({
     label: g[0].label, cat1: g[0].cat1, keys: g.map((x) => x.key), total: g.reduce((a, x) => a + x.total, 0),
     count: g.reduce((a, x) => a + x.count, 0), edited: g.some((x) => x.edited),
   }))
-  const shown = byTitle(d.unexpected.filter((u) => hasTag(d, [u.key], filter)), (u) => u.content).map((g) => ({
-    content: g[0].content, cat1: g[0].cat1, count: g.length, dates: datesOf(g.map((u) => u.at)),
-    amount: g.reduce((a, u) => a + u.amount, 0), keys: uniq(g.map((u) => u.key)), edited: g.some((u) => u.edited),
-    reason: uniq(g.map((u) => u.reason)).join(' / '),
-  })).sort((a, b) => b.amount - a.amount)
+  const rowsOf = (dd: FinOverview, only: boolean) =>
+    byTitle(dd.unexpected.filter((u) => (only ? txTagsOf(dd, [u.ref]).length === 0 : hasTxTag(dd, [u.ref], filter))), (u) => u.content).map((g) => ({
+      refs: g.map((u) => u.ref),
+      content: g[0].content, cat1: g[0].cat1, count: g.length, dates: datesOf(g.map((u) => u.at)),
+      amount: g.reduce((a, u) => a + u.amount, 0), keys: uniq(g.map((u) => u.key)), edited: g.some((u) => u.edited),
+      reason: uniq(g.map((u) => u.reason)).join(' / '),
+    })).sort((a, b) => b.amount - a.amount)
+  const item = (u: ReturnType<typeof rowsOf>[number], dd: FinOverview) => (
+    <li key={u.content} className="flex items-center gap-2 py-2">
+      <div className="min-w-0 flex-1">
+        <button type="button" onClick={() => onOpen({ keys: u.keys, label: u.content, cat1: u.cat1 })} className="-mx-1 block w-full rounded-lg px-1 py-0.5 text-left">
+          <div className="flex items-baseline gap-2">
+            <span className="min-w-0 flex-1 truncate text-sm">{u.content}<Count n={u.count} />{u.edited && <Edited />}</span>
+            <span className="shrink-0 text-sm font-semibold tabular-nums">{fmtWon(u.amount)}</span>
+          </div>
+          <p className="text-[11px] text-faint">{u.dates} · {u.reason}</p>
+          <MemoLine d={dd} keys={u.keys} />
+        </button>
+        <TagChips ids={txTagsOf(dd, u.refs)} tags={dd.tags} onEdit={() => onTag(txTarget(dd, u.content, u.refs, u.keys))} />
+      </div>
+      <div className="flex shrink-0 flex-col items-end gap-1">
+        <span className="flex gap-1">
+          <MoveBtn onClick={() => setRegular.mutate(u.keys)}>평소</MoveBtn>
+          <MoveBtn onClick={() => setFixed.mutate(u.keys.map((k): Pair => [k, true]))}>고정</MoveBtn>
+        </span>
+        <NotBtn onClick={() => setSpend.mutate({ keys: u.keys, spend: false })}>지출 아님</NotBtn>
+      </div>
+    </li>
+  )
+  const shown = rowsOf(d, false)
   const total = shown.reduce((a, u) => a + u.amount, 0)
   return (
-    <Card id="unexpected" title="예상 외 지출" right={<MonthSelect d={d} onMonth={onMonth} />}>
-      <FilterNote d={d} filter={filter} onClear={onClearFilter} />
-      {shown.length === 0 ? (
-        <p className="text-xs text-faint">{d.unexpected.length === 0 ? '평소와 다르게 큰 지출이 없었어요.' : '이 태그가 붙은 예상 외 지출이 없어요.'}</p>
+    <Card id="unexpected" title="예상 외 지출" right={<CardTools d={d} un={un} setUn={setUn} onMonth={onMonth} />}>
+      {un ? (
+        <UntaggedFeed d={d} owner={owner} kind="unexpected" render={(p) => { const rs = rowsOf(p, true); return rs.length ? <ul className="divide-y divide-line">{rs.map((u) => item(u, p))}</ul> : null }} />
       ) : (
         <>
-          <p className="mb-1 text-xs text-muted">{shown.length}개 · {fmtWon(total)}</p>
-          <ul className="divide-y divide-line">
-            {shown.map((u) => (
-              <li key={u.content} className="flex items-center gap-2 py-2">
-                <div className="min-w-0 flex-1">
-                  <button type="button" onClick={() => onOpen({ keys: u.keys, label: u.content, cat1: u.cat1 })} className="-mx-1 block w-full rounded-lg px-1 py-0.5 text-left">
-                    <div className="flex items-baseline gap-2">
-                      <span className="min-w-0 flex-1 truncate text-sm">{u.content}<Count n={u.count} />{u.edited && <Edited />}</span>
-                      <span className="shrink-0 text-sm font-semibold tabular-nums">{fmtWon(u.amount)}</span>
-                    </div>
-                    <p className="text-[11px] text-faint">{u.dates} · {u.reason}</p>
-                  </button>
-                  <TagChips ids={d.tag_links[u.keys[0]]} tags={d.tags} onEdit={() => onTag({ keys: u.keys, label: u.content })} />
-                </div>
-                <div className="flex shrink-0 flex-col items-end gap-1">
-                  <MoveBtn onClick={() => setFixed.mutate(u.keys.map((k): Pair => [k, true]))}>고정</MoveBtn>
-                  <NotBtn onClick={() => setSpend.mutate({ keys: u.keys, spend: false })}>지출 아님</NotBtn>
-                </div>
+          <FilterNote d={d} filter={filter} onClear={onClearFilter} />
+          {shown.length === 0 ? (
+            <p className="text-xs text-faint">{d.unexpected.length === 0 ? '평소와 다르게 큰 지출이 없었어요.' : '이 태그가 붙은 예상 외 지출이 없어요.'}</p>
+          ) : (
+            <>
+              <p className="mb-1 text-xs text-muted">{shown.length}개 · {fmtWon(total)}</p>
+              <ul className="divide-y divide-line">{shown.map((u) => item(u, d))}</ul>
+            </>
+          )}
+          <Tucked title="지출에서 뺀 항목" count={notSpend.length}>
+            {notSpend.map((x) => (
+              <li key={x.label} className="flex items-center gap-2 py-1.5">
+                <button type="button" onClick={() => onOpen({ keys: x.keys, label: x.label, cat1: x.cat1 })} className="min-w-0 flex-1 text-left">
+                  <p className="truncate text-sm text-muted">{x.label}{x.edited && <Edited />}</p>
+                  <p className="text-[11px] text-faint">{x.cat1 || '미분류'} · 최근 13개월 {x.count}건 · 합 {fmtWonShort(x.total)}</p>
+                  <MemoLine d={d} keys={x.keys} />
+                </button>
+                <MoveBtn onClick={() => setSpend.mutate({ keys: x.keys, spend: true })}>지출로</MoveBtn>
               </li>
             ))}
-          </ul>
+          </Tucked>
+          <p className="mt-2 text-[11px] text-faint">이름이 같은 건 합쳐서 보여요. 내 다른 계좌로 옮긴 돈처럼 쓴 돈이 아니면 '지출 아님'으로 빼요(고정지출·예상 외·월별 흐름 모두에서 빠져요).</p>
         </>
       )}
-      <Tucked title="지출에서 뺀 항목" count={notSpend.length}>
-        {notSpend.map((x) => (
-          <li key={x.label} className="flex items-center gap-2 py-1.5">
-            <button type="button" onClick={() => onOpen({ keys: x.keys, label: x.label, cat1: x.cat1 })} className="min-w-0 flex-1 text-left">
-              <p className="truncate text-sm text-muted">{x.label}{x.edited && <Edited />}</p>
-              <p className="text-[11px] text-faint">{x.cat1 || '미분류'} · 최근 13개월 {x.count}건 · 합 {fmtWonShort(x.total)}</p>
-            </button>
-            <MoveBtn onClick={() => setSpend.mutate({ keys: x.keys, spend: true })}>지출로</MoveBtn>
-          </li>
-        ))}
-      </Tucked>
-      <p className="mt-2 text-[11px] text-faint">이름이 같은 건 합쳐서 보여요. 내 다른 계좌로 옮긴 돈처럼 쓴 돈이 아니면 '지출 아님'으로 빼요(고정지출·예상 외·월별 흐름 모두에서 빠져요).</p>
     </Card>
   )
 }
@@ -710,7 +922,7 @@ function UploadSheet({ open, onClose, people, defaultOwner, fmt }: {
   }
 
   return (
-    <Sheet open={open} onClose={() => { reset(); setOwner(0); onClose() }} title={fmt?.configured ? `${fmt.source_name} 파일 올리기` : '재정 파일 올리기'}>
+    <Sheet open={open} onClose={() => { reset(); setOwner(0); onClose() }} title={fmt?.configured ? `${fmt.source_name} 파일 올리기` : '자산 파일 올리기'}>
       {fmt && !fmt.configured ? (
         <p className="text-sm text-muted">파일 규격이 서버에 설정되지 않아 올릴 수 없어요. (data/finance-format.json)</p>
       ) : (
