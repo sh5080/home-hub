@@ -60,6 +60,7 @@ func NewWithHub(st *store.Store, log *slog.Logger, dev bool) (http.Handler, inte
 	s.registerCare(authed)
 	s.registerNotify(authed)
 	s.registerFinance(authed)
+	s.registerFamily(authed)
 	authed.HandleFunc("GET /api/stream", s.stream)
 	authed.HandleFunc("GET /api/storage", s.storage)
 	authed.HandleFunc("GET /api/search", s.search)
@@ -73,7 +74,7 @@ func NewWithHub(st *store.Store, log *slog.Logger, dev bool) (http.Handler, inte
 		"/api/routines", "/api/routines/", "/api/calendar", "/api/today", "/api/stream", "/api/storage", "/api/search",
 		"/api/babyfood", "/api/babyfood/",
 		"/api/diary", "/api/diary/", "/api/media", "/api/media/", "/api/care", "/api/care/",
-		"/api/push/", "/api/notify/", "/api/finance/",
+		"/api/push/", "/api/notify/", "/api/finance/", "/api/family", "/api/family/",
 		// /api/ 밖의 유일한 인증 경로. SPA 핸들러보다 먼저 잡혀야 한다.
 		"/media/",
 	} {

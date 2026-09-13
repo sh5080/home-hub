@@ -33,7 +33,8 @@ var NotifySources = []NotifySource{
 	{"routines", "루틴", "오늘 해야 할 루틴", []string{"pending"}},
 	{"care", "육아 기록", "고른 기록(수유·기저귀 등) 중 하나라도", []string{"since", "none_today"}},
 	{"diary", "일기", "가족 일기", []string{"none_today", "since"}},
-	{"finance", "재정 파일", "사람마다 마지막으로 올린 파일 — 그 사람에게 보내요", []string{"since"}},
+	{"finance", "자산 파일", "사람마다 마지막으로 올린 파일 — 그 사람에게 보내요", []string{"since"}},
+	{"report", "월간 리포트", "매달 1일 정한 시각에, 지난달 우리 가족이 함께 쌓은 것을 정리해 보내요", []string{"always"}},
 	{"custom", "조건 없이", "정한 시각에 문구만 보내요", []string{"always"}},
 }
 
@@ -410,6 +411,17 @@ func (s *Store) evalAt(ctx context.Context, r NotifyRule, date string) (Notifica
 			return Notification{}, false, nil
 		}
 		return Notification{Title: orDefault(name, "오늘 일기를 아직 안 썼어요"), Body: "오늘 있었던 일 한 줄만 남겨볼까요?", URL: "/diary/new"}, true, nil
+	case "report":
+		if date[8:10] != "01" {
+			return Notification{}, false, nil
+		}
+		d, _ := time.Parse("2006-01-02", date)
+		month := d.AddDate(0, -1, 0).Format("2006-01")
+		body, err := s.FamilyMonthReport(ctx, month)
+		if err != nil {
+			return Notification{}, false, err
+		}
+		return Notification{Title: orDefault(name, fmt.Sprintf("%d월 우리 가족 리포트", int(d.AddDate(0, -1, 0).Month()))), Body: body, URL: "/family"}, true, nil
 	case "custom":
 		body := r.Params.Message
 		title := orDefault(name, "알림")
@@ -496,7 +508,7 @@ func (s *Store) notifySince(ctx context.Context, r NotifyRule, now time.Time) ([
 			}
 			out = append(out, Notification{
 				RuleID: r.ID, Key: fmt.Sprintf("fin:%d:%d", owner, lastUnix), Recipients: []int64{owner}, URL: "/finance",
-				Title: orDefault(r.Title, "재정 파일을 올릴 때예요"),
+				Title: orDefault(r.Title, "자산 파일을 올릴 때예요"),
 				Body:  fmt.Sprintf("%s님, 마지막으로 올린 지 %s 지났어요. 새로 받아서 올려주세요.", name, ago(last)),
 			})
 		}

@@ -717,7 +717,7 @@ func TestEveryAPIGroupIsRouted(t *testing.T) {
 	for _, path := range []string{
 		"/api/me", "/api/users", "/api/boards", "/api/calendar?from=2026-01-01&to=2026-01-02",
 		"/api/routines", "/api/today?date=2026-01-01", "/api/storage", "/api/search?q=x",
-		"/api/babyfood/children", "/api/diary", "/api/care/kinds", "/api/notify/rules", "/api/push/key", "/api/finance/overview",
+		"/api/babyfood/children", "/api/diary", "/api/care/kinds", "/api/notify/rules", "/api/push/key", "/api/finance/overview", "/api/family",
 	} {
 		if code := c.do("GET", path, nil, nil); code == 404 {
 			t.Errorf("%s 가 404 다 — 바깥 mux 에 경로가 빠졌다", path)
