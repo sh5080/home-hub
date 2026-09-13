@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router'
 import { useQueryClient } from '@tanstack/react-query'
 import { api, type BFRangeData, type SearchAll } from '../api'
-import { useBabyfood, useCalendar, useDiary, useInvalidating, useMe, useSearch, useToday, useUsers } from '../lib/hooks'
+import { useBabyfood, useCalendar, useDiary, useFamily, useInvalidating, useMe, useSearch, useToday, useUsers } from '../lib/hooks'
+import { Plant } from '../components/Plant'
 import { addDays, ageOf, ampm, dueLabel, fmtDate, fmtDue, fmtTime, hasTime, lifeDay, lifeDayOf, maskBit, today, weekdayIndex, WEEKDAYS } from '../lib/date'
 import { Avatar, Button, Collapsible, Field, Input, PasswordInput, PageHeader, Sheet, SkeletonList } from '../components/ui'
 import { useDiaryViewer } from '../components/DiaryViewer'
@@ -107,6 +108,7 @@ export default function Dashboard() {
       />
 
       <div className="space-y-6 px-4 py-4">
+        <FamilyCard />
         <section>
           <div className="mb-2 flex items-center justify-between gap-2">
             <h2 className="text-base font-bold">오늘 할 일</h2>
@@ -648,4 +650,33 @@ function greeting() {
   if (h < 12) return '좋은 아침'
   if (h < 18) return '좋은 오후'
   return '좋은 저녁'
+}
+
+const STREAK_NAME: Record<string, string> = { routines: '루틴 연속', diary: '일기 연속', care: '육아 연속 기록', budget: '생활비 페이스 연속' }
+
+// 홈의 '함께' 카드: 식물, 이번 주 퀘스트, 새 마일스톤. 누르면 '함께' 화면.
+function FamilyCard() {
+  const q = useFamily()
+  const b = q.data
+  if (!b) return null
+  const p = b.plant
+  const done = b.quests.filter((x) => x.done).length
+  const fresh = b.milestones.filter((m) => m.new)
+  const best = [...b.streaks].sort((x, y) => y.current - x.current)[0]
+  return (
+    <Link to="/family" className="family-theme dark relative flex items-center gap-3 overflow-hidden rounded-3xl bg-canvas p-4 text-ink shadow-[0_12px_28px_-16px_rgba(16,28,52,0.9)]">
+      <div className="min-w-0 flex-1">
+        <p className="text-[11px] font-bold tracking-wide text-[#c9a64a]">우리 가족 · {p.name || '콩이'}</p>
+        <p className="hero-title mt-1 text-xl font-black leading-tight">{p.ready ? '다 키웠어요!' : `콩이 ${p.stage}단계`}</p>
+        <div className="mt-2 space-y-0.5 text-xs text-muted">
+          <p>🎯 이번 주 퀘스트 <b className="text-ink">{done}/{b.quests.length}</b></p>
+          {best && best.current > 0 && <p>🔥 {STREAK_NAME[best.key] ?? best.label} <b className="text-ink">{best.current}일</b></p>}
+          {p.today > 0 && <p>💧 오늘 받은 물방울 <b className="text-ink">+{p.today}</b></p>}
+          {p.credits > 0 && <p className="font-semibold text-[#e2b84a]">🎟️ 구매권 {p.credits}장 — 위시리스트에서 사요</p>}
+          {fresh.length > 0 && <p className="truncate font-semibold text-[#e2b84a]">🎉 {fresh[0].label}{fresh.length > 1 && ` 외 ${fresh.length - 1}개`}</p>}
+        </div>
+      </div>
+      <div className="-my-2 -mr-2 shrink-0"><Plant stage={p.stage} size={112} happy={p.ready || p.today > 0} /></div>
+    </Link>
+  )
 }

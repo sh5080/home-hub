@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient, useInfiniteQuery } from '@tanstack/react-query'
-import { api, type BFChild, type BFFood, type BFRangeData, type BFStockView, type SearchAll, type Board, type BoardDetail, type Card, type Routine, type User, type DiaryEntry, type CareDay, type CareKind, type CareLog, type FinOverview, type FinFormat} from '../api'
+import { api, type BFChild, type BFFood, type BFRangeData, type BFStockView, type SearchAll, type Board, type BoardDetail, type Card, type Routine, type User, type DiaryEntry, type CareDay, type CareKind, type CareLog, type FinOverview, type FinFormat, type FamilyBoard} from '../api'
 
 export function useMe() {
   return useQuery({ queryKey: ['me'], queryFn: () => api.get<User>('/api/me'), staleTime: Infinity })
@@ -165,4 +165,8 @@ export function useFinance(owner: number, month?: string) {
 
 export function useFinFormat() {
   return useQuery({ queryKey: ['finance', 'format'], queryFn: () => api.get<FinFormat>('/api/finance/format'), staleTime: Infinity })
+}
+
+export function useFamily() {
+  return useQuery({ queryKey: ['family'], queryFn: () => api.get<FamilyBoard>('/api/family') })
 }

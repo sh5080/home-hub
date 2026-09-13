@@ -1,4 +1,5 @@
 import { useLayoutEffect, useRef } from 'react'
+import TaskRewardLayer from './TaskRewardLayer'
 import { Outlet, useLocation, useNavigate } from 'react-router'
 import DiaryViewer from './DiaryViewer'
 
@@ -51,6 +52,7 @@ export default function Shell() {
         style={{ paddingBottom: 'calc(4rem + env(safe-area-inset-bottom, 0px))' }}
       >
         <Outlet />
+        <TaskRewardLayer />
       </main>
       <TabBar />
       <DiaryViewer />
@@ -81,9 +83,9 @@ const groups: Group[] = [
     ],
   },
   {
-    key: 'money', label: '재정', icon: WalletIcon,
+    key: 'money', label: '자산', icon: WalletIcon,
     tabs: [
-      { to: '/finance', label: '재정', icon: WalletIcon, match: ['/finance'] },
+      { to: '/finance', label: '자산', icon: WalletIcon, match: ['/finance'] },
       { to: '/finance/goals', label: '목표', icon: GoalIcon, match: ['/finance/goals'] },
     ],
   },

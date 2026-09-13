@@ -101,7 +101,7 @@ CREATE TABLE cards (
   created_by  INTEGER NOT NULL REFERENCES users(id),
   created_at  INTEGER NOT NULL,
   updated_at  INTEGER NOT NULL
-, content TEXT, priority INTEGER NOT NULL DEFAULT 0, end_at TEXT, recur           TEXT, recur_until     TEXT, recur_parent_id INTEGER REFERENCES cards(id) ON DELETE SET NULL, done_at INTEGER, archived_at INTEGER);
+, content TEXT, priority INTEGER NOT NULL DEFAULT 0, end_at TEXT, recur           TEXT, recur_until     TEXT, recur_parent_id INTEGER REFERENCES cards(id) ON DELETE SET NULL, done_at INTEGER, archived_at INTEGER, first_due TEXT);
 
 CREATE TABLE care_log_items (
   log_id        INTEGER NOT NULL REFERENCES care_logs(id) ON DELETE CASCADE,
@@ -152,6 +152,38 @@ CREATE TABLE diary_refs (
   PRIMARY KEY (entry_id, pos)
 );
 
+CREATE TABLE family_drops (
+  key    TEXT    PRIMARY KEY,
+  amount INTEGER NOT NULL,
+  day    TEXT    NOT NULL,        -- 'YYYY-MM-DD' 얻은 날
+  label  TEXT    NOT NULL
+);
+
+CREATE TABLE family_plants (
+  id          INTEGER PRIMARY KEY,
+  started     TEXT    NOT NULL,   -- 'YYYY-MM-DD' 이날부터 모은 물방울만 센다
+  finished_at INTEGER,
+  wish_id     INTEGER
+, name TEXT NOT NULL DEFAULT '');
+
+CREATE TABLE family_weeks (
+  week       TEXT PRIMARY KEY,
+  reward     TEXT NOT NULL DEFAULT '',
+  updated_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE family_wishes (
+  id         INTEGER PRIMARY KEY,
+  title      TEXT    NOT NULL,
+  price      INTEGER NOT NULL DEFAULT 0,
+  note       TEXT    NOT NULL DEFAULT '',
+  created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at INTEGER NOT NULL,
+  bought_at  INTEGER,
+  plant_id   INTEGER REFERENCES family_plants(id) ON DELETE SET NULL
+);
+
 CREATE TABLE fin_fixed (
   key   TEXT    PRIMARY KEY,
   fixed INTEGER NOT NULL
@@ -189,7 +221,7 @@ CREATE TABLE fin_labels (
   key   TEXT PRIMARY KEY,
   label TEXT NOT NULL DEFAULT '',
   cat1  TEXT NOT NULL DEFAULT ''
-);
+, memo TEXT NOT NULL DEFAULT '');
 
 CREATE TABLE fin_not_spend (
   key TEXT PRIMARY KEY
@@ -233,6 +265,32 @@ CREATE TABLE fin_tx (
   hash      TEXT    NOT NULL,
   UNIQUE (owner_id, hash)
 );
+
+CREATE TABLE fin_tx_tags (
+  ref    TEXT    NOT NULL,
+  tag_id INTEGER NOT NULL REFERENCES fin_tags(id) ON DELETE CASCADE,
+  PRIMARY KEY (ref, tag_id)
+);
+
+CREATE TABLE fin_wallet_spends (
+  id         INTEGER PRIMARY KEY,
+  wallet_id  INTEGER NOT NULL REFERENCES fin_wallets(id) ON DELETE CASCADE,
+  at         TEXT    NOT NULL,
+  title      TEXT    NOT NULL,
+  amount     INTEGER NOT NULL,    -- 양수
+  created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at INTEGER NOT NULL
+);
+
+CREATE TABLE fin_wallets (
+  id           INTEGER PRIMARY KEY,
+  owner_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name         TEXT    NOT NULL,
+  match        TEXT    NOT NULL,   -- 충전 이체의 내용에 들어 있는 글자(예: 경기지역화폐)
+  base_balance INTEGER NOT NULL,
+  base_at      TEXT    NOT NULL,   -- 'YYYY-MM-DDTHH:MM'
+  created_at   INTEGER NOT NULL
+, incentive_rate REAL NOT NULL DEFAULT 0.1, base_incentive INTEGER NOT NULL DEFAULT 0);
 
 CREATE TABLE kv (
   key   TEXT PRIMARY KEY,
@@ -357,11 +415,17 @@ CREATE INDEX diary_refs_target ON diary_refs(kind, ref_id);
 
 CREATE UNIQUE INDEX diary_source ON diary(source) WHERE source IS NOT NULL;
 
+CREATE INDEX family_drops_day ON family_drops(day);
+
 CREATE INDEX fin_items_snap ON fin_items(snapshot_id);
 
 CREATE INDEX fin_tag_links_tag ON fin_tag_links(tag_id);
 
 CREATE INDEX fin_tx_owner_at ON fin_tx(owner_id, at);
+
+CREATE INDEX fin_tx_tags_tag ON fin_tx_tags(tag_id);
+
+CREATE INDEX fin_wallet_spends_wallet ON fin_wallet_spends(wallet_id, at);
 
 CREATE INDEX login_attempts_locked ON login_attempts(locked_until);
 

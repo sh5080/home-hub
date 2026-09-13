@@ -13,6 +13,7 @@ import Routines from './pages/Routines'
 import Babyfood from './pages/Babyfood'
 import Care from './pages/Care'
 import Notify from './pages/Notify'
+import Family from './pages/Family'
 import Finance from './pages/Finance'
 import FinanceGoals from './pages/FinanceGoals'
 import BabyfoodStock from './pages/BabyfoodStock'
@@ -38,6 +39,7 @@ export default function App() {
           <Route path="routines" element={<Routines />} />
           <Route path="care" element={<Care />} />
           <Route path="notify" element={<Notify />} />
+          <Route path="family" element={<Family />} />
           <Route path="finance" element={<Finance />} />
           <Route path="finance/goals" element={<FinanceGoals />} />
           <Route path="babyfood" element={<Babyfood />} />

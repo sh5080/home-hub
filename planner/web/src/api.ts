@@ -41,8 +41,16 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
         : res.statusText
     throw new ApiError(res.status, msg)
   }
+  // 할 일을 완료 칸으로 옮기면 서버가 판정(reward)을 붙인다 — 어느 화면에서 옮겼든 여기서 한 번 알린다.
+  if (method === 'PATCH' && data && typeof data === 'object' && 'reward' in data) {
+    const c = data as { title?: string; reward?: TaskReward }
+    if (c.reward) window.dispatchEvent(new CustomEvent<TaskRewardEvent>('task-reward', { detail: { ...c.reward, title: c.title ?? '' } }))
+  }
   return data as T
 }
+
+export interface TaskReward { on_time: boolean; first_due: string; drops: number }
+export type TaskRewardEvent = TaskReward & { title: string }
 
 export const api = {
   get: <T>(path: string) => request<T>('GET', path),
@@ -371,7 +379,7 @@ export interface FinItem {
   principal: number | null
   rate: number | null
 }
-export interface FinMonth { month: string; in: number; other_in: number; fixed_in: number; fixed_save: number; unexpected: number; spend: number; save: number; fixed: number; variable: number; partial: boolean }
+export interface FinMonth { month: string; in: number; other_in: number; fixed_in: number; fixed_save: number; unexpected: number; wallet: number; spend: number; save: number; fixed: number; variable: number; partial: boolean }
 export interface FinFixed { key: string; label: string; cat1: string; kind: 'spend' | 'save'; monthly: number; months: number; auto: boolean; fixed: boolean; override: boolean | null; edited: boolean }
 export interface FinDetail {
   months: { month: string; amount: number; count: number }[]
@@ -380,12 +388,20 @@ export interface FinDetail {
 export interface FinTag { id: number; name: string; color: string }
 export interface FinIncome { key: string; keys: string[]; edited: boolean; label: string; cat1: string; monthly: number; months: number; total: number; auto: boolean; income: boolean; override: boolean | null
   months6: number; fixed: boolean; fixed_auto: boolean; fixed_override: boolean | null }
+export interface FinWallet {
+  id: number; owner_id: number; name: string; match: string; base_balance: number; base_incentive: number; base_at: string; rate: number
+  balance: number; charged: number; earned: number; spent: number
+  recent: { id: number; at: string; title: string; amount: number }[]
+  charges: { at: string; amount: number }[]
+}
+export interface FinRegular { key: string; ref: string; edited: boolean; at: string; content: string; cat1: string; amount: number; wallet: boolean }
 export interface FinNotSpend { key: string; label: string; cat1: string; total: number; count: number; edited: boolean }
-export interface FinIncomeTx { group: string; keys: string[]; at: string; content: string; cat1: string; amount: number; edited: boolean }
-export interface FinUnexpected { key: string; edited: boolean; at: string; content: string; cat1: string; amount: number; reason: string }
+export interface FinIncomeTx { group: string; ref: string; key: string; keys: string[]; at: string; content: string; cat1: string; amount: number; edited: boolean }
+export interface FinUnexpected { key: string; ref: string; edited: boolean; at: string; content: string; cat1: string; amount: number; reason: string }
 export interface FinPlan {
   income_base: number; income_hint: number; fixed_income: number; fixed_spend: number; fixed_save: number; goals_monthly: number
   spendable: number; variable_avg: number; buffer_months: number; liquid: number; emergency: number; spend_avg: number; free: number
+  month_spent: number; month_wallet: number; month_unexpected: number; days_passed: number; days_in_month: number
 }
 export interface FinGoal { id: number; name: string; target: number; due: string | null; monthly: number; items: string[]; current: number }
 export interface FinOverview {
@@ -400,13 +416,17 @@ export interface FinOverview {
   income: FinIncome[]
   income_tx: FinIncomeTx[]
   not_spend: FinNotSpend[]
+  wallets: FinWallet[]
   tags: FinTag[]
-  labels: Record<string, { label: string; cat1: string }>
+  labels: Record<string, { label: string; cat1: string; memo: string }>
   tag_links: Record<string, number[]>
+  tx_tags: Record<string, number[]>
+  key_tx_tags: Record<string, number[]>
   tag_spend: { tag_id: number; amount: number; count: number }[]
   untagged: number
   month: string
   unexpected: FinUnexpected[]
+  regular: FinRegular[]
   plan: FinPlan
   goals: FinGoal[]
   tx_count: number
@@ -426,7 +446,7 @@ export interface FinImportResult {
   tx_total: number; tx_new: number; tx_from: string; tx_to: string; replace_snapshot: boolean
 }
 
-/** 재정 파일 올리기. apply=false 면 미리보기만. */
+/** 자산 파일 올리기. apply=false 면 미리보기만. */
 export async function importFinance(file: File, owner: number, apply: boolean): Promise<FinImportResult> {
   const fd = new FormData()
   fd.append('file', file)
@@ -439,4 +459,22 @@ export async function importFinance(file: File, owner: number, apply: boolean): 
     throw new Error(msg)
   }
   return res.json()
+}
+
+// --- 함께(가족 퀘스트·식물) ---
+export interface FamilyQuest { key: string; label: string; help: string; value: number; target: number; done: boolean; unit: string; by: Record<string, number> | null; url: string }
+export interface FamilyStreak { key: string; label: string; current: number; today_done: boolean; month_done: number; month_days: number; url: string }
+export interface FamilyMilestone { key: string; group: string; label: string; value: number; target: number; done: boolean; at: string; new: boolean; url: string }
+export interface FamilyWish { id: number; title: string; price: number; note: string; created_by: number | null; bought_at: number | null }
+export interface FamilyPlant { id: number; name: string; credits: number; started: string; drops: number; stage: number; next: number; today: number; ready: boolean; count: number; recent: { day: string; label: string; amount: number }[] }
+export interface FamilyBoard {
+  plant: FamilyPlant
+  stages: { name: string; drops: number }[]
+  wishes: FamilyWish[]
+  week: string; week_end: string
+  quests: FamilyQuest[]
+  streaks: FamilyStreak[]
+  jar: { spendable: number; month_left: number; pace: number; incentive: number; total: number; from: string; months: { month: string; saved: number }[]; goal_name: string; goal_target: number } | null
+  milestones: FamilyMilestone[]
+  together: Record<string, number>
 }

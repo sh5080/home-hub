@@ -3,7 +3,7 @@ import { useQueryClient } from '@tanstack/react-query'
 
 // SSE 로 '바뀌었다'를 받아 목록을 다시 불러온다.
 // 카드 상세(['card', id])는 무효화하지 않는다 — 편집 중 다시 불러오면 문서가 리셋되고 커서가 튄다.
-const LIVE_KEYS = ['boards', 'board', 'today', 'calendar', 'routines', 'users', 'babyfood', 'babyfood-stock', 'babyfood-foods']
+const LIVE_KEYS = ['boards', 'board', 'today', 'calendar', 'routines', 'users', 'babyfood', 'babyfood-stock', 'babyfood-foods', 'family']
 
 const RETRY_MIN = 2000
 const RETRY_MAX = 30000

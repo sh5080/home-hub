@@ -158,3 +158,73 @@ select {
   background-size: 0.875rem;
   padding-right: 1.75rem;
 }
+
+/* 함께 키우는 식물: 살랑살랑, 다 자라면 반짝. 움직임 줄이기 설정이면 멈춘다. */
+@keyframes plant-sway { 0%, 100% { transform: rotate(-2.5deg) } 50% { transform: rotate(2.5deg) } }
+@keyframes plant-twinkle { 0%, 100% { opacity: .3; transform: scale(.85) } 50% { opacity: 1; transform: scale(1.1) } }
+.plant-sway { animation: plant-sway 3.2s ease-in-out infinite; }
+.plant-twinkle { animation: plant-twinkle 1.8s ease-in-out infinite; transform-box: fill-box; transform-origin: center; }
+@media (prefers-reduced-motion: reduce) { .plant-sway, .plant-twinkle { animation: none; } }
+
+/* 할 일 판정: 카드가 톡 튀어나오고, 제때 끝냈으면 물방울이 흩어진다. */
+@keyframes reward-pop { 0% { transform: scale(.6) translateY(-8px); opacity: 0 } 60% { transform: scale(1.06); opacity: 1 } 100% { transform: scale(1) } }
+@keyframes reward-drop { 0% { transform: translate(0, 20px) scale(.4); opacity: 0 } 25% { opacity: 1 } 100% { transform: translate(var(--dx), var(--dy)) scale(1); opacity: 0 } }
+.reward-pop { animation: reward-pop .45s cubic-bezier(.2,.9,.3,1.3) both; }
+.reward-drop { animation: reward-drop 1.1s ease-out both; }
+@media (prefers-reduced-motion: reduce) { .reward-pop, .reward-drop { animation: none; } .reward-drop { display: none; } }
+
+/* 식물 쓰다듬기: 찌그러졌다 통통 튀고, 하트·반짝이가 퍼지고, 말풍선이 톡. */
+@keyframes plant-poke { 0% { transform: scale(1, 1) } 18% { transform: scale(1.12, .86) } 38% { transform: scale(.92, 1.1) translateY(-8px) } 58% { transform: scale(1.04, .97) } 78% { transform: scale(.99, 1.02) } 100% { transform: scale(1, 1) } }
+@keyframes plant-bit { 0% { transform: translate(-50%, -50%) scale(.3); opacity: 0 } 20% { opacity: 1 } 100% { transform: translate(calc(-50% + var(--dx)), calc(-50% + var(--dy))) rotate(var(--r)) scale(1.1); opacity: 0 } }
+@keyframes plant-say { 0% { transform: translate(-50%, 6px) scale(.7); opacity: 0 } 15% { transform: translate(-50%, 0) scale(1.05); opacity: 1 } 25% { transform: translate(-50%, 0) scale(1) } 85% { opacity: 1 } 100% { transform: translate(-50%, -4px); opacity: 0 } }
+.plant-poke { animation: plant-poke .6s cubic-bezier(.3,1.4,.5,1) both; }
+.plant-bit { animation: plant-bit .95s ease-out both; }
+.plant-say { animation: plant-say 1.6s ease-out both; }
+@media (prefers-reduced-motion: reduce) { .plant-poke, .plant-bit { animation: none; } .plant-bit { display: none; } }
+
+/* 가만히 있어도: 가끔 눈을 깜빡이고, 가끔 폴짝. */
+@keyframes plant-blink { 0%, 90%, 100% { transform: scaleY(1) } 93% { transform: scaleY(.1) } 96% { transform: scaleY(1) } }
+@keyframes plant-idle { 0%, 78%, 100% { transform: translateY(0) scale(1, 1) } 82% { transform: translateY(0) scale(1.04, .96) } 86% { transform: translateY(-4px) scale(.98, 1.03) } 90% { transform: translateY(0) scale(1.02, .98) } 94% { transform: translateY(0) scale(1, 1) } }
+.plant-blink { animation: plant-blink 4.2s ease-in-out infinite; transform-box: fill-box; transform-origin: center; }
+.plant-idle { animation: plant-idle 6.5s ease-in-out infinite; transform-origin: 50% 90%; }
+@media (prefers-reduced-motion: reduce) { .plant-blink, .plant-idle { animation: none; } }
+
+/* 다 키웠을 때 위에서 흩날리는 축하 */
+@keyframes confetti { 0% { transform: translateY(-20px) rotate(0); opacity: 0 } 15% { opacity: 1 } 100% { transform: translateY(140px) rotate(220deg); opacity: 0 } }
+.confetti { animation: confetti 2.4s ease-in infinite; }
+@media (prefers-reduced-motion: reduce) { .confetti { display: none; } }
+
+/* '함께' 화면 테마: 네이비 바탕 · 금빛 · 크림. .dark 와 함께 써서 토큰만 갈아끼운다(뒤에 와야 이긴다). */
+.family-theme {
+  --c-canvas: #263a5c;
+  --c-surface: #2c4266;
+  --c-surface-2: #344c73;
+  --c-line: #3e5781;
+  --c-ink: #f3ebdd;
+  --c-ink-2: #e7dcc6;
+  --c-muted: #b7c1d4;
+  --c-faint: #8794ad;
+  --c-ghost: #5b6f93;
+  --c-accent: #f3ebdd;
+  --c-accent-ink: #22334f;
+  /* --color-* 는 :root 에서 한 번 풀린 값이라, 여기서 다시 묶어야 이 영역에 바뀐 색이 먹는다. */
+  --color-canvas: var(--c-canvas);
+  --color-surface: var(--c-surface);
+  --color-surface-2: var(--c-surface-2);
+  --color-line: var(--c-line);
+  --color-ink: var(--c-ink);
+  --color-ink-2: var(--c-ink-2);
+  --color-muted: var(--c-muted);
+  --color-faint: var(--c-faint);
+  --color-ghost: var(--c-ghost);
+  --color-accent: var(--c-accent);
+  --color-accent-ink: var(--c-accent-ink);
+  color-scheme: dark;
+}
+.hero-title {
+  background: linear-gradient(180deg, #fbf4e4 0%, #f3dc98 55%, #e9c46a 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  filter: drop-shadow(0 0 22px rgba(240, 205, 120, 0.28));
+}
